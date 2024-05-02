@@ -155,7 +155,9 @@ void load(const DataSet *dataset, const ClientFactory *cf,
   assert(dataset != nullptr);
   assert(cf != nullptr);
   size_t batch_size = default_load_batch_size;
-  size_t thread_num = std::thread::hardware_concurrency() * 2;
+  size_t thread_num = dataset->format_ == DataSetFormat::PARQUET_FORMAT
+                          ? dataset->base_files_.size()
+                          : std::thread::hardware_concurrency() * 2;
   size_t client_num =
       std::thread::hardware_concurrency(); // number of pg client
   ssize_t queue_capacity = default_queue_capacity;
@@ -165,11 +167,27 @@ void load(const DataSet *dataset, const ClientFactory *cf,
   if (bs.has_value()) {
     batch_size = std::stoul(bs.value());
   }
-  // parse thread num
+  // parse thread num used for datasource
   auto tn = Util::getValueFromMap(load_opt_map, "thread_num");
   if (tn.has_value()) {
-    thread_num = std::stoul(tn.value());
+    auto parsed_thread_num = std::stoul(tn.value());
+    if (dataset->format_ == DataSetFormat::PARQUET_FORMAT) {
+      if (parsed_thread_num > thread_num) {
+        SPDLOG_WARN("The specified thread number {} exceeds the optimal number "
+                    "for processing {} base {}, fallback to using {}",
+                    parsed_thread_num, dataset->base_files_.size(),
+                    dataset->base_files_.size() > 1 ? "files" : "file",
+                    thread_num);
+        std::exit(1);
+      } else {
+        thread_num = parsed_thread_num;
+      }
+    } else {
+      thread_num = parsed_thread_num;
+    }
   }
+  assert(thread_num > 0);
+
   // parse client num
   auto cn = Util::getValueFromMap(load_opt_map, "client_num");
   if (cn.has_value()) {
