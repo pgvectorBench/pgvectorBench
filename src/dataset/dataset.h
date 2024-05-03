@@ -36,6 +36,12 @@ enum class DataSetMetric : uint8_t {
   JACCARD, // Jaccard distance
 };
 
+enum class DataSetFilterType : uint8_t {
+  NONE,
+  BY_CONSTANT,
+  BY_VALUE,
+};
+
 std::string_view metric2ops(enum DataSetMetric metric);
 std::string_view metric2operator(enum DataSetMetric metric);
 
@@ -44,14 +50,17 @@ struct DataSet {
           DataSetBaseType base_type, DataSetMetric metric,
           std::vector<std::pair<std::string, size_t>> base_files,
           std::vector<std::pair<std::string, std::string>> fields,
+          std::vector<std::tuple<std::string, std::string, std::string,
+                                 std::string, std::string>>
+              filter_fields,
           std::string vector_field, size_t dim, size_t total_cnt,
           std::pair<std::string, size_t> query_file,
           std::pair<std::string, size_t> gt_file, size_t gt_topk)
       : location_(location), name_(name), format_(format),
         base_type_(base_type), metric_(metric), base_files_(base_files),
-        fields_(fields), vector_field_(vector_field), dim_(dim),
-        total_cnt_(total_cnt), query_file_(query_file), gt_file_(gt_file),
-        gt_topk_(gt_topk) {
+        fields_(fields), filter_fields_(filter_fields),
+        vector_field_(vector_field), dim_(dim), total_cnt_(total_cnt),
+        query_file_(query_file), gt_file_(gt_file), gt_topk_(gt_topk) {
     validate();
   }
 
@@ -74,7 +83,18 @@ struct DataSet {
   // base set files
   std::vector<std::pair<std::string, size_t>> base_files_;
   std::vector<std::pair<std::string, std::string>>
-      fields_;               // field name, type pair
+      fields_; // field name, type pair
+  /*
+   * A tuple containing the components of a filter field, structured as follows:
+   * - `prologue`: Text that precedes the filter condition.
+   * - `field`: The name of the field to be filtered.
+   * - `op`: The operation to be performed for filtering.
+   * - `value`: A string representing the value to compare against.
+   * - `epilogue`: Text that follows the filter condition.
+   */
+  std::vector<std::tuple<std::string, std::string, std::string, std::string,
+                         std::string>>
+      filter_fields_;
   std::string vector_field_; // build vector index on this field
   size_t dim_;               // dimention of the vector field
   size_t total_cnt_;         // nb base vectors

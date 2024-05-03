@@ -22,6 +22,7 @@ std::unordered_map<std::string, std::shared_ptr<DataSet>> ds_map = {
                      {std::make_pair("siftsmall_base.fvecs", 10000)},
                      {std::make_pair("id", "int"),
                       std::make_pair("embedding", "vector(128)")}, // fields
+                     {},          // filter field
                      "embedding", // vector field
                      128,         // dimension
                      10000,       // nb base vectors
@@ -38,9 +39,10 @@ std::unordered_map<std::string, std::shared_ptr<DataSet>> ds_map = {
          {std::make_pair("sift_base.fvecs", 1000000)},
          {std::make_pair("id", "int"),
           std::make_pair("embedding", "vector(128)")}, // fields
-         "embedding",
-         128,     // dimension
-         1000000, // nb base vectors
+         {},                                           // filter field
+         "embedding",                                  // vector field
+         128,                                          // dimension
+         1000000,                                      // nb base vectors
          std::make_pair("sift_query.fvecs", 10000),
          std::make_pair("sift_groundtruth.ivecs", 10000), 100 /* gt_topk */
          ))},
@@ -54,9 +56,10 @@ std::unordered_map<std::string, std::shared_ptr<DataSet>> ds_map = {
          {std::make_pair("gist_base.fvecs", 1000000)},
          {std::make_pair("id", "int"),
           std::make_pair("embedding", "vector(960)")}, // fields
-         "embedding",
-         960,     // demension
-         1000000, // nb base vectors
+         {},                                           // filter field
+         "embedding",                                  // vector field
+         960,                                          // demension
+         1000000,                                      // nb base vectors
          std::make_pair("gist_query.fvecs", 1000),
          std::make_pair("gist_groundtruth.ivecs", 1000), 100 /* gt_topk */
          ))},
@@ -70,6 +73,7 @@ std::unordered_map<std::string, std::shared_ptr<DataSet>> ds_map = {
          {std::make_pair("glove-100_base.fvecs", 1183514)},
          {std::make_pair("id", "int"),
           std::make_pair("embedding", "vector(100)")}, // fields
+         {},                                           // filter field
          "embedding",                                  // vector field
          100,                                          // dimension
          1183514,                                      // nb base vectors
@@ -86,6 +90,7 @@ std::unordered_map<std::string, std::shared_ptr<DataSet>> ds_map = {
                      {std::make_pair("crawl_base.fvecs", 1989995)},
                      {std::make_pair("id", "int"),
                       std::make_pair("embedding", "vector(300)")}, // fields
+                     {},          // filter field
                      "embedding", // vector field
                      300,         // dimension
                      1989995,     // nb base vectors
@@ -101,6 +106,7 @@ std::unordered_map<std::string, std::shared_ptr<DataSet>> ds_map = {
          {std::make_pair("deep1B_base.fvecs", 1000000000)},
          {std::make_pair("id", "int"),
           std::make_pair("embedding", "vector(96)")}, // fields
+         {},                                          // filter field
          "embedding",                                 // vector field
          96,                                          // dimension
          1000000000,                                  // nb base vectors
@@ -117,11 +123,46 @@ std::unordered_map<std::string, std::shared_ptr<DataSet>> ds_map = {
          {std::make_pair("train.parquet", 100000)},
          {std::make_pair("id", "int8"),
           std::make_pair("emb", "vector(768)")}, // fields
+         {},                                     // filter field
          "emb",                                  // vector field
          768,                                    // dimension
          100000,                                 // nb base vectors
          std::make_pair("test.parquet", 1000),
          std::make_pair("neighbors.parquet", 1000), 1000 /* gt_topk */
+         ))},
+    {"cohere_small_100k_filter1",
+     std::shared_ptr<DataSet>(new DataSet(
+         default_parquet_location + "cohere_small_100k", // location
+         "cohere_small_100k_filter1",                    // name
+         DataSetFormat::PARQUET_FORMAT,                  // format
+         DataSetBaseType::FLOAT,                         // base type
+         DataSetMetric::COSINE,                          // metric
+         {std::make_pair("shuffle_train.parquet", 100000)},
+         {std::make_pair("id", "int8"),
+          std::make_pair("emb", "vector(768)")},        // fields
+         {std::make_tuple("", "id", ">=", "1000", "")}, // filter field
+         "emb",                                         // vector field
+         768,                                           // dimension
+         100000,                                        // nb base vectors
+         std::make_pair("test.parquet", 1000),
+         std::make_pair("neighbors_head_1p.parquet", 1000), 1000 /* gt_topk */
+         ))},
+    {"cohere_small_100k_filter99",
+     std::shared_ptr<DataSet>(new DataSet(
+         default_parquet_location + "cohere_small_100k", // location
+         "cohere_small_100k_filter99",                   // name
+         DataSetFormat::PARQUET_FORMAT,                  // format
+         DataSetBaseType::FLOAT,                         // base type
+         DataSetMetric::COSINE,                          // metric
+         {std::make_pair("shuffle_train.parquet", 100000)},
+         {std::make_pair("id", "int8"),
+          std::make_pair("emb", "vector(768)")},         // fields
+         {std::make_tuple("", "id", ">=", "99000", "")}, // filter field
+         "emb",                                          // vector field
+         768,                                            // dimension
+         100000,                                         // nb base vectors
+         std::make_pair("test.parquet", 1000),
+         std::make_pair("neighbors_tail_1p.parquet", 1000), 1000 /* gt_topk */
          ))},
     {"cohere_medium_1m",
      std::shared_ptr<DataSet>(new DataSet(
@@ -133,11 +174,46 @@ std::unordered_map<std::string, std::shared_ptr<DataSet>> ds_map = {
          {std::make_pair("train.parquet", 1000000)},
          {std::make_pair("id", "int8"),
           std::make_pair("emb", "vector(768)")}, // fields
+         {},                                     // filter field
          "emb",                                  // vector field
          768,                                    // dimension
          1000000,                                // nb base vectors
          std::make_pair("test.parquet", 1000),
          std::make_pair("neighbors.parquet", 1000), 1000 /* gt_topk */
+         ))},
+    {"cohere_medium_1m_filter1",
+     std::shared_ptr<DataSet>(new DataSet(
+         default_parquet_location + "cohere_medium_1m", // location
+         "cohere_medium_1m_filter1",                    // name
+         DataSetFormat::PARQUET_FORMAT,                 // format
+         DataSetBaseType::FLOAT,                        // base type
+         DataSetMetric::COSINE,                         // metric
+         {std::make_pair("shuffle_train.parquet", 1000000)},
+         {std::make_pair("id", "int8"),
+          std::make_pair("emb", "vector(768)")},         // fields
+         {std::make_tuple("", "id", ">=", "10000", "")}, // filter field
+         "emb",                                          // vector field
+         768,                                            // dimension
+         1000000,                                        // nb base vectors
+         std::make_pair("test.parquet", 1000),
+         std::make_pair("neighbors_head_1p.parquet", 1000), 1000 /* gt_topk */
+         ))},
+    {"cohere_medium_1m_filter99",
+     std::shared_ptr<DataSet>(new DataSet(
+         default_parquet_location + "cohere_medium_1m", // location
+         "cohere_medium_1m_filter99",                   // name
+         DataSetFormat::PARQUET_FORMAT,                 // format
+         DataSetBaseType::FLOAT,                        // base type
+         DataSetMetric::COSINE,                         // metric
+         {std::make_pair("shuffle_train.parquet", 1000000)},
+         {std::make_pair("id", "int8"),
+          std::make_pair("emb", "vector(768)")},          // fields
+         {std::make_tuple("", "id", ">=", "990000", "")}, // filter field
+         "emb",                                           // vector field
+         768,                                             // dimension
+         1000000,                                         // nb base vectors
+         std::make_pair("test.parquet", 1000),
+         std::make_pair("neighbors_tail_1p.parquet", 1000), 1000 /* gt_topk */
          ))},
     {"cohere_large_10m",
      std::shared_ptr<DataSet>(new DataSet(
@@ -158,11 +234,64 @@ std::unordered_map<std::string, std::shared_ptr<DataSet>> ds_map = {
           std::make_pair("train-09-of-10.parquet", 1000000)},
          {std::make_pair("id", "int8"),
           std::make_pair("emb", "vector(768)")}, // fields
+         {},                                     // filter field
          "emb",                                  // vector field
          768,                                    // dimension
          10000000,                               // nb base vectors
          std::make_pair("test.parquet", 1000),
          std::make_pair("neighbors.parquet", 1000), 1000 /* gt_topk */
+         ))},
+    {"cohere_large_10m_filter1",
+     std::shared_ptr<DataSet>(new DataSet(
+         default_parquet_location + "cohere_large_10m", // location
+         "cohere_large_10m_filter1",                    // name
+         DataSetFormat::PARQUET_FORMAT,                 // format
+         DataSetBaseType::FLOAT,                        // base type
+         DataSetMetric::COSINE,                         // metric
+         {std::make_pair("shuffle_train-00-of-10.parquet", 1000000),
+          std::make_pair("shuffle_train-01-of-10.parquet", 1000000),
+          std::make_pair("shuffle_train-02-of-10.parquet", 1000000),
+          std::make_pair("shuffle_train-03-of-10.parquet", 1000000),
+          std::make_pair("shuffle_train-04-of-10.parquet", 1000000),
+          std::make_pair("shuffle_train-05-of-10.parquet", 1000000),
+          std::make_pair("shuffle_train-06-of-10.parquet", 1000000),
+          std::make_pair("shuffle_train-07-of-10.parquet", 1000000),
+          std::make_pair("shuffle_train-08-of-10.parquet", 1000000),
+          std::make_pair("shuffle_train-09-of-10.parquet", 1000000)},
+         {std::make_pair("id", "int8"),
+          std::make_pair("emb", "vector(768)")},          // fields
+         {std::make_tuple("", "id", ">=", "100000", "")}, // filter field
+         "emb",                                           // vector field
+         768,                                             // dimension
+         10000000,                                        // nb base vectors
+         std::make_pair("test.parquet", 1000),
+         std::make_pair("neighbors_head_1p.parquet", 1000), 1000 /* gt_topk */
+         ))},
+    {"cohere_large_10m_filter99",
+     std::shared_ptr<DataSet>(new DataSet(
+         default_parquet_location + "cohere_large_10m", // location
+         "cohere_large_10m_filter99",                   // name
+         DataSetFormat::PARQUET_FORMAT,                 // format
+         DataSetBaseType::FLOAT,                        // base type
+         DataSetMetric::COSINE,                         // metric
+         {std::make_pair("shuffle_train-00-of-10.parquet", 1000000),
+          std::make_pair("shuffle_train-01-of-10.parquet", 1000000),
+          std::make_pair("shuffle_train-02-of-10.parquet", 1000000),
+          std::make_pair("shuffle_train-03-of-10.parquet", 1000000),
+          std::make_pair("shuffle_train-04-of-10.parquet", 1000000),
+          std::make_pair("shuffle_train-05-of-10.parquet", 1000000),
+          std::make_pair("shuffle_train-06-of-10.parquet", 1000000),
+          std::make_pair("shuffle_train-07-of-10.parquet", 1000000),
+          std::make_pair("shuffle_train-08-of-10.parquet", 1000000),
+          std::make_pair("shuffle_train-09-of-10.parquet", 1000000)},
+         {std::make_pair("id", "int8"),
+          std::make_pair("emb", "vector(768)")},           // fields
+         {std::make_tuple("", "id", ">=", "9900000", "")}, // filter field
+         "emb",                                            // vector field
+         768,                                              // dimension
+         10000000,                                         // nb base vectors
+         std::make_pair("test.parquet", 1000),
+         std::make_pair("neighbors_tail_1p.parquet", 1000), 1000 /* gt_topk */
          ))},
     {"openai_small_50k",
      std::shared_ptr<DataSet>(new DataSet(
@@ -174,11 +303,46 @@ std::unordered_map<std::string, std::shared_ptr<DataSet>> ds_map = {
          {std::make_pair("train.parquet", 50000)},
          {std::make_pair("id", "int8"),
           std::make_pair("emb", "vector(1536)")}, // fields
+         {},                                      // filter field
          "emb",                                   // vector field
          1536,                                    // dimension
          50000,                                   // nb base vectors
          std::make_pair("test.parquet", 1000),
          std::make_pair("neighbors.parquet", 1000), 1000 /* gt_topk */
+         ))},
+    {"openai_small_50k_filter1",
+     std::shared_ptr<DataSet>(new DataSet(
+         default_parquet_location + "openai_small_50k", // location
+         "openai_small_50k_filter1",                    // name
+         DataSetFormat::PARQUET_FORMAT,                 // format
+         DataSetBaseType::DOUBLE,                       // base type
+         DataSetMetric::COSINE,                         // metric
+         {std::make_pair("shuffle_train.parquet", 50000)},
+         {std::make_pair("id", "int8"),
+          std::make_pair("emb", "vector(1536)")},      // fields
+         {std::make_tuple("", "id", ">=", "500", "")}, // filter field
+         "emb",                                        // vector field
+         1536,                                         // dimension
+         50000,                                        // nb base vectors
+         std::make_pair("test.parquet", 1000),
+         std::make_pair("neighbors_head_1p.parquet", 1000), 1000 /* gt_topk */
+         ))},
+    {"openai_small_50k_filter99",
+     std::shared_ptr<DataSet>(new DataSet(
+         default_parquet_location + "openai_small_50k", // location
+         "openai_small_50k_filter99",                   // name
+         DataSetFormat::PARQUET_FORMAT,                 // format
+         DataSetBaseType::DOUBLE,                       // base type
+         DataSetMetric::COSINE,                         // metric
+         {std::make_pair("shuffle_train.parquet", 50000)},
+         {std::make_pair("id", "int8"),
+          std::make_pair("emb", "vector(1536)")},        // fields
+         {std::make_tuple("", "id", ">=", "49500", "")}, // filter field
+         "emb",                                          // vector field
+         1536,                                           // dimension
+         50000,                                          // nb base vectors
+         std::make_pair("test.parquet", 1000),
+         std::make_pair("neighbors_tail_1p.parquet", 1000), 500 /* gt_topk */
          ))},
     {"openai_medium_500k",
      std::shared_ptr<DataSet>(new DataSet(
@@ -190,11 +354,46 @@ std::unordered_map<std::string, std::shared_ptr<DataSet>> ds_map = {
          {std::make_pair("train.parquet", 500000)},
          {std::make_pair("id", "int8"),
           std::make_pair("emb", "vector(1536)")}, // fields
+         {},                                      // filter field
          "emb",                                   // vector field
          1536,                                    // dimension
          500000,                                  // nb base vectors
          std::make_pair("test.parquet", 1000),
          std::make_pair("neighbors.parquet", 1000), 1000 /* gt_topk */
+         ))},
+    {"openai_medium_500k_filter1",
+     std::shared_ptr<DataSet>(new DataSet(
+         default_parquet_location + "openai_medium_500k", // location
+         "openai_medium_500k_filter1",                    // name
+         DataSetFormat::PARQUET_FORMAT,                   // format
+         DataSetBaseType::DOUBLE,                         // base type
+         DataSetMetric::COSINE,                           // metric
+         {std::make_pair("shuffle_train.parquet", 500000)},
+         {std::make_pair("id", "int8"),
+          std::make_pair("emb", "vector(1536)")},       // fields
+         {std::make_tuple("", "id", ">=", "5000", "")}, // filter field
+         "emb",                                         // vector field
+         1536,                                          // dimension
+         500000,                                        // nb base vectors
+         std::make_pair("test.parquet", 1000),
+         std::make_pair("neighbors_head_1p.parquet", 1000), 1000 /* gt_topk */
+         ))},
+    {"openai_medium_500k_filter99",
+     std::shared_ptr<DataSet>(new DataSet(
+         default_parquet_location + "openai_medium_500k", // location
+         "openai_medium_500k_filter99",                   // name
+         DataSetFormat::PARQUET_FORMAT,                   // format
+         DataSetBaseType::DOUBLE,                         // base type
+         DataSetMetric::COSINE,                           // metric
+         {std::make_pair("shuffle_train.parquet", 500000)},
+         {std::make_pair("id", "int8"),
+          std::make_pair("emb", "vector(1536)")},         // fields
+         {std::make_tuple("", "id", ">=", "495000", "")}, // filter field
+         "emb",                                           // vector field
+         1536,                                            // dimension
+         500000,                                          // nb base vectors
+         std::make_pair("test.parquet", 1000),
+         std::make_pair("neighbors_tail_1p.parquet", 1000), 1000 /* gt_topk */
          ))},
     {"openai_large_5m",
      std::shared_ptr<DataSet>(new DataSet(
@@ -215,11 +414,64 @@ std::unordered_map<std::string, std::shared_ptr<DataSet>> ds_map = {
           std::make_pair("train-09-of-10.parquet", 500000)},
          {std::make_pair("id", "int8"),
           std::make_pair("emb", "vector(1536)")}, // fields
+         {},                                      // filter field
          "emb",                                   // vector field
          1536,                                    // dimension
          5000000,                                 // nb base vectors
          std::make_pair("test.parquet", 1000),
          std::make_pair("neighbors.parquet", 1000), 1000 /* gt_topk */
+         ))},
+    {"openai_large_5m_filter1",
+     std::shared_ptr<DataSet>(new DataSet(
+         default_parquet_location + "openai_large_5m", // location
+         "openai_large_5m_filter1",                    // name
+         DataSetFormat::PARQUET_FORMAT,                // format
+         DataSetBaseType::DOUBLE,                      // base type
+         DataSetMetric::COSINE,                        // metric
+         {std::make_pair("shuffle_train-00-of-10.parquet", 500000),
+          std::make_pair("shuffle_train-01-of-10.parquet", 500000),
+          std::make_pair("shuffle_train-02-of-10.parquet", 500000),
+          std::make_pair("shuffle_train-03-of-10.parquet", 500000),
+          std::make_pair("shuffle_train-04-of-10.parquet", 500000),
+          std::make_pair("shuffle_train-05-of-10.parquet", 500000),
+          std::make_pair("shuffle_train-06-of-10.parquet", 500000),
+          std::make_pair("shuffle_train-07-of-10.parquet", 500000),
+          std::make_pair("shuffle_train-08-of-10.parquet", 500000),
+          std::make_pair("shuffle_train-09-of-10.parquet", 500000)},
+         {std::make_pair("id", "int8"),
+          std::make_pair("emb", "vector(1536)")},        // fields
+         {std::make_tuple("", "id", ">=", "50000", "")}, // filter field
+         "emb",                                          // vector field
+         1536,                                           // dimension
+         5000000,                                        // nb base vectors
+         std::make_pair("test.parquet", 1000),
+         std::make_pair("neighbors_head_1p.parquet", 1000), 1000 /* gt_topk */
+         ))},
+    {"openai_large_5m_filter99",
+     std::shared_ptr<DataSet>(new DataSet(
+         default_parquet_location + "openai_large_5m", // location
+         "openai_large_5m_filter99",                   // name
+         DataSetFormat::PARQUET_FORMAT,                // format
+         DataSetBaseType::DOUBLE,                      // base type
+         DataSetMetric::COSINE,                        // metric
+         {std::make_pair("shuffle_train-00-of-10.parquet", 500000),
+          std::make_pair("shuffle_train-01-of-10.parquet", 500000),
+          std::make_pair("shuffle_train-02-of-10.parquet", 500000),
+          std::make_pair("shuffle_train-03-of-10.parquet", 500000),
+          std::make_pair("shuffle_train-04-of-10.parquet", 500000),
+          std::make_pair("shuffle_train-05-of-10.parquet", 500000),
+          std::make_pair("shuffle_train-06-of-10.parquet", 500000),
+          std::make_pair("shuffle_train-07-of-10.parquet", 500000),
+          std::make_pair("shuffle_train-08-of-10.parquet", 500000),
+          std::make_pair("shuffle_train-09-of-10.parquet", 500000)},
+         {std::make_pair("id", "int8"),
+          std::make_pair("emb", "vector(1536)")},          // fields
+         {std::make_tuple("", "id", ">=", "4950000", "")}, // filter field
+         "emb",                                            // vector field
+         1536,                                             // dimension
+         5000000,                                          // nb base vectors
+         std::make_pair("test.parquet", 1000),
+         std::make_pair("neighbors_tail_1p.parquet", 1000), 1000 /* gt_topk */
          ))},
     {"laion_large_100m",
      std::shared_ptr<DataSet>(new DataSet(
@@ -330,6 +582,7 @@ std::unordered_map<std::string, std::shared_ptr<DataSet>> ds_map = {
           std::make_pair("train-99-of-100.parquet", 1000000)},
          {std::make_pair("id", "int8"),
           std::make_pair("emb", "vector(1536)")}, // fields
+         {},                                      // filter field
          "emb",                                   // vector field
          768,                                     // dimension
          100000000,                               // nb base vectors

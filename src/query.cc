@@ -3,6 +3,7 @@
 #include <memory>
 #include <sstream>
 #include <thread>
+#include <tuple>
 #include <type_traits>
 
 // third party
@@ -160,6 +161,16 @@ prepareParquetQueries(const DataSet *dataset,
   std::ostringstream oss;
   oss << "SELECT id FROM "
       << (table_name.has_value() ? table_name.value() : dataset->name_);
+  if (!dataset->filter_fields_.empty()) {
+    oss << " WHERE ";
+    for (const auto &filter : dataset->filter_fields_) {
+      oss << std::get<0>(filter); // prologue
+      oss << std::get<1>(filter); // field name
+      oss << std::get<2>(filter); // operator
+      oss << std::get<3>(filter); // value
+      oss << std::get<4>(filter); // epilogue
+    }
+  }
   oss << " ORDER BY " << dataset->vector_field_ << " "
       << metric2operator(dataset->metric_) << " ";
 
@@ -346,7 +357,7 @@ void query(const DataSet *dataset, const ClientFactory *cf,
   size_t top_k1 = top_k2;
   if (top_k1_opt.has_value()) {
     top_k1 = std::stol(top_k1_opt.value());
-    if (top_k1 > top_k2 || top_k1 <= 0) {
+    if (top_k1 > top_k2 || top_k1 <= 0 || top_k1 > dataset->gt_topk_) {
       SPDLOG_ERROR("Illegal k1 value: {}", top_k1);
     }
   }
