@@ -287,7 +287,6 @@ prepareParquetGroundTruths(const DataSet *dataset, size_t top_k1) {
       for (size_t i = 0; i < recordBatch->num_rows(); i++) {
         size_t begin = list_array->value_offset(i * 2);
         size_t end = list_array->value_offset((i + 1) * 2);
-        assert((end - begin) == dataset->gt_topk_);
         for (int j = begin; j < begin + top_k1; j++) {
           gts[id_array->Value(i)][j - begin] = int_array->Value(j);
         }

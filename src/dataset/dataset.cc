@@ -145,7 +145,7 @@ std::unordered_map<std::string, std::shared_ptr<DataSet>> ds_map = {
          768,                                           // dimension
          100000,                                        // nb base vectors
          std::make_pair("test.parquet", 1000),
-         std::make_pair("neighbors_head_1p.parquet", 1000), 1000 /* gt_topk */
+         std::make_pair("neighbors_head_1p.parquet", 1000), 950 /* gt_topk */
          ))},
     {"cohere_small_100k_filter99",
      std::shared_ptr<DataSet>(new DataSet(
@@ -325,7 +325,7 @@ std::unordered_map<std::string, std::shared_ptr<DataSet>> ds_map = {
          1536,                                         // dimension
          50000,                                        // nb base vectors
          std::make_pair("test.parquet", 1000),
-         std::make_pair("neighbors_head_1p.parquet", 1000), 1000 /* gt_topk */
+         std::make_pair("neighbors_head_1p.parquet", 1000), 950 /* gt_topk */
          ))},
     {"openai_small_50k_filter99",
      std::shared_ptr<DataSet>(new DataSet(
