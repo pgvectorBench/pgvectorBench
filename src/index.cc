@@ -148,7 +148,11 @@ void create_index(
   std::string statement;
 
   auto index_type = Util::getValueFromMap(index_opt_map, "index_type");
-  assert(index_type.has_value());
+  if (!index_type.has_value()) {
+    SPDLOG_ERROR("The type of index must be explicitly specified when creating "
+                 "an index");
+    std::exit(1);
+  }
   std::string index_type_lower_case = index_type.value();
   std::transform(index_type_lower_case.begin(), index_type_lower_case.end(),
                  index_type_lower_case.begin(),

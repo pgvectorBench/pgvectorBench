@@ -175,7 +175,7 @@ int main(int argc, char **argv) {
           }
         },
         ';');
-    if (Util::getValueFromMap(setup_opt_map, "index_name").has_value()) {
+    if (Util::getValueFromMap(setup_opt_map, "index_type").has_value()) {
       // index created in setup phase
       index_created = true;
     }

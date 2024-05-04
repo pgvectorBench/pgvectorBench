@@ -103,7 +103,7 @@ void setup(const DataSet *dataset, const ClientFactory *cf,
   }
 
   // create index in setup phase, this is ahead of loading phase
-  auto index_name = Util::getValueFromMap(setup_opt_map, "index_name");
+  auto index_name = Util::getValueFromMap(setup_opt_map, "index_type");
   if (index_name.has_value()) {
     SPDLOG_INFO("start creating index in setup phase");
     create_index(dataset, cf, setup_opt_map);
