@@ -13,6 +13,7 @@
 #include <ryu/ryu.h>
 
 #include "dataset/dataset.h"
+#include "dataset/parquet_ground_truth.h"
 #include "utils/client_factory.h"
 #include "utils/file_reader.h"
 #include "utils/parser.h"
@@ -285,13 +286,8 @@ prepareParquetGroundTruths(const DataSet *dataset, size_t top_k1) {
       auto int_array =
           std::static_pointer_cast<arrow::Int64Array>(list_array->values());
       for (size_t i = 0; i < recordBatch->num_rows(); i++) {
-        size_t begin = list_array->value_offset(i * 2);
-        size_t end = list_array->value_offset((i + 1) * 2);
-        for (int j = begin; j < begin + top_k1; j++) {
-          gts[id_array->Value(i)][j - begin] = int_array->Value(j);
-        }
-        std::sort(gts[id_array->Value(i)].begin(),
-                  gts[id_array->Value(i)].end());
+        copyParquetGroundTruthRow(*id_array, *list_array, *int_array, i,
+                                  top_k1, gts);
       }
     }
   } while (recordBatch);
