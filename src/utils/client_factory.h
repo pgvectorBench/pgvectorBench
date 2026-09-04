@@ -66,6 +66,26 @@ public:
     if (PQresultStatus(res.get()) != PGRES_COMMAND_OK) {
       SPDLOG_ERROR("excute COPY command failed: {}",
                    PQresultErrorMessage(res.get()));
+      res.reset();
+      while (auto *pending = PQgetResult(connection_)) {
+        PQclear(pending);
+      }
+      return false;
+    }
+
+    // PQgetResult must be called until it returns nullptr before another
+    // command can be issued on this connection.
+    bool trailing_results_ok = true;
+    while (auto *pending = PQgetResult(connection_)) {
+      std::unique_ptr<PGresult, decltype(&PQclear)> trailing(pending, &PQclear);
+      if (PQresultStatus(trailing.get()) != PGRES_COMMAND_OK) {
+        SPDLOG_ERROR("unexpected trailing COPY result: {}",
+                     PQresultErrorMessage(trailing.get()));
+        trailing_results_ok = false;
+      }
+    }
+
+    if (!trailing_results_ok) {
       return false;
     }
 
