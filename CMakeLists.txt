@@ -16,6 +16,8 @@ project(
     HOMEPAGE_URL "https://github.com/zhjwpku/pgvectorBench"
     LANGUAGES CXX C)
 
+include(CTest)
+
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE "Release")
 endif()
@@ -37,3 +39,7 @@ find_package(Threads REQUIRED)
 
 add_subdirectory(third_party)
 add_subdirectory(src)
+
+if(BUILD_TESTING)
+    add_subdirectory(tests)
+endif()
