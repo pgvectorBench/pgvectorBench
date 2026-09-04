@@ -16,3 +16,6 @@ target_link_libraries(
 
 add_test(NAME client_factory_test COMMAND client_factory_test)
 set_tests_properties(client_factory_test PROPERTIES SKIP_RETURN_CODE 77)
+
+add_test(NAME cli_version COMMAND pgvectorbench --version)
+add_test(NAME cli_help COMMAND pgvectorbench --help)

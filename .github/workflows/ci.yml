@@ -1,0 +1,120 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build (${{ matrix.build_type }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      PGVECTORBENCH_TEST_DATABASE: postgres
+
+    strategy:
+      fail-fast: false
+      matrix:
+        build_type:
+          - Debug
+          - Release
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          submodules: recursive
+
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y ca-certificates cmake g++ libpq-dev lsb-release ninja-build postgresql wget
+
+          distro="$(lsb_release --id --short | tr 'A-Z' 'a-z')"
+          codename="$(lsb_release --codename --short)"
+          arrow_package="apache-arrow-apt-source-latest-${codename}.deb"
+          wget --quiet "https://packages.apache.org/artifactory/arrow/${distro}/${arrow_package}"
+          sudo apt-get install -y -V "./${arrow_package}"
+          sudo apt-get update
+          sudo apt-get install -y -V libparquet-dev
+
+      - name: Start test database
+        run: |
+          sudo systemctl start postgresql
+          sudo -u postgres createuser --superuser runner
+
+      - name: Configure
+        run: >-
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+
+      - name: Build
+        run: cmake --build build --parallel 2
+
+      - name: Run tests
+        run: ctest --test-dir build --output-on-failure --no-tests=error
+
+      - name: Smoke-test CLI
+        run: |
+          ./build/pgvectorbench --version
+          ./build/pgvectorbench --help
+
+  macos:
+    name: Build (macOS 15)
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      PGVECTORBENCH_TEST_DATABASE: postgres
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          submodules: recursive
+
+      - name: Install build dependencies
+        run: |
+          brew install apache-arrow cmake ninja postgresql@17
+          echo "$(brew --prefix postgresql@17)/bin" >> "$GITHUB_PATH"
+
+      - name: Start test database
+        run: |
+          brew services start postgresql@17
+          for attempt in {1..30}; do
+            if pg_isready --quiet; then
+              exit 0
+            fi
+            sleep 1
+          done
+          brew services info postgresql@17
+          exit 1
+
+      - name: Configure
+        run: >-
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_PREFIX_PATH="$(brew --prefix apache-arrow);$(brew --prefix postgresql@17)"
+          -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+
+      - name: Build
+        run: cmake --build build --parallel 2
+
+      - name: Run tests
+        run: ctest --test-dir build --output-on-failure --no-tests=error
+
+      - name: Smoke-test CLI
+        run: |
+          ./build/pgvectorbench --version
+          ./build/pgvectorbench --help
