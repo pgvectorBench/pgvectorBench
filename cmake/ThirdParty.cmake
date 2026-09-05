@@ -19,6 +19,9 @@ set(PGVECTORBENCH_CONCURRENTQUEUE_SHA256
 set(PGVECTORBENCH_SPDLOG_VERSION "1.17.0")
 set(PGVECTORBENCH_SPDLOG_SHA256
     "d8862955c6d74e5846b3f580b1605d2428b11d97a410d86e2fb13e857cd3a744")
+set(PGVECTORBENCH_NLOHMANN_JSON_VERSION "3.12.0")
+set(PGVECTORBENCH_NLOHMANN_JSON_SHA256
+    "42f6e95cad6ec532fd372391373363b62a14af6d771056dbfc86160e6dfff7aa")
 set(PGVECTORBENCH_GOOGLETEST_VERSION "1.18.0")
 set(PGVECTORBENCH_GOOGLETEST_SHA256
     "6e3191c1455468b3fc35a417fb565c1c5071aee1b7e7f85e30cf48a98d37d8b5")
@@ -108,6 +111,8 @@ set(SPDLOG_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(SPDLOG_BUILD_TESTS_HO OFF CACHE BOOL "" FORCE)
 set(SPDLOG_BUILD_BENCH OFF CACHE BOOL "" FORCE)
 set(SPDLOG_INSTALL OFF CACHE BOOL "" FORCE)
+set(JSON_BuildTests OFF CACHE BOOL "" FORCE)
+set(JSON_Install OFF CACHE BOOL "" FORCE)
 
 FetchContent_Declare(
   argparse
@@ -134,6 +139,17 @@ FetchContent_Declare(
   URL_HASH "SHA256=${PGVECTORBENCH_SPDLOG_SHA256}")
 
 FetchContent_MakeAvailable(argparse concurrentqueue ryu spdlog)
+
+# System Arrow can import nlohmann/json as a transitive dependency. Reuse that
+# target instead of defining it again; otherwise use the pinned vendored source.
+if(NOT TARGET nlohmann_json::nlohmann_json)
+  FetchContent_Declare(
+    nlohmann_json
+    URL
+      "https://github.com/nlohmann/json/releases/download/v${PGVECTORBENCH_NLOHMANN_JSON_VERSION}/json.tar.xz"
+    URL_HASH "SHA256=${PGVECTORBENCH_NLOHMANN_JSON_SHA256}")
+  FetchContent_MakeAvailable(nlohmann_json)
+endif()
 
 if(BUILD_TESTING)
   set(BUILD_GMOCK OFF CACHE BOOL "" FORCE)

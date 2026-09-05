@@ -2,7 +2,6 @@
 #include <charconv>
 #include <chrono>
 #include <cmath>
-#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <memory>
@@ -21,6 +20,7 @@
 #include "dataset/dataset.h"
 #include "dataset/parquet_embedding.h"
 #include "dataset/parquet_ground_truth.h"
+#include "query.h"
 #include "utils/client_factory.h"
 #include "utils/file_reader.h"
 #include "utils/parser.h"
@@ -160,23 +160,20 @@ prepareParquetQueries(const DataSet *dataset,
   parquet::arrow::FileReaderBuilder reader_builder;
   auto status = reader_builder.OpenFile(file_path, /*memory_map*/ false);
   if (!status.ok()) {
-    SPDLOG_ERROR("open file failed: {}", status.ToString());
-    std::exit(1);
+    throw std::runtime_error("open file failed: " + status.ToString());
   }
   reader_builder.memory_pool(pool);
 
   std::unique_ptr<parquet::arrow::FileReader> arrow_reader;
   status = reader_builder.Build(&arrow_reader);
   if (!status.ok()) {
-    SPDLOG_ERROR("build arrow reader failed: {}", status.ToString());
-    std::exit(1);
+    throw std::runtime_error("build arrow reader failed: " + status.ToString());
   }
 
   auto rb_reader_result = arrow_reader->GetRecordBatchReader();
   if (!rb_reader_result.ok()) {
-    SPDLOG_ERROR("get record batch reader failed: {}",
-                 rb_reader_result.status().ToString());
-    std::exit(1);
+    throw std::runtime_error("get record batch reader failed: " +
+                             rb_reader_result.status().ToString());
   }
   auto rb_reader = std::move(rb_reader_result).ValueOrDie();
 
@@ -205,8 +202,7 @@ prepareParquetQueries(const DataSet *dataset,
   do {
     status = rb_reader->ReadNext(&recordBatch);
     if (!status.ok()) {
-      SPDLOG_ERROR("read next batch failed: {}", status.ToString());
-      std::exit(1);
+      throw std::runtime_error("read next batch failed: " + status.ToString());
     }
     if (recordBatch) {
       const auto &ids = parquetRowIds(*recordBatch);
@@ -250,23 +246,20 @@ prepareParquetGroundTruths(const DataSet *dataset, size_t top_k1) {
   parquet::arrow::FileReaderBuilder reader_builder;
   auto status = reader_builder.OpenFile(file_path, /*memory_map*/ false);
   if (!status.ok()) {
-    SPDLOG_ERROR("open file failed: {}", status.ToString());
-    std::exit(1);
+    throw std::runtime_error("open file failed: " + status.ToString());
   }
   reader_builder.memory_pool(pool);
 
   std::unique_ptr<parquet::arrow::FileReader> arrow_reader;
   status = reader_builder.Build(&arrow_reader);
   if (!status.ok()) {
-    SPDLOG_ERROR("build arrow reader failed: {}", status.ToString());
-    std::exit(1);
+    throw std::runtime_error("build arrow reader failed: " + status.ToString());
   }
 
   auto rb_reader_result = arrow_reader->GetRecordBatchReader();
   if (!rb_reader_result.ok()) {
-    SPDLOG_ERROR("get record batch reader failed: {}",
-                 rb_reader_result.status().ToString());
-    std::exit(1);
+    throw std::runtime_error("get record batch reader failed: " +
+                             rb_reader_result.status().ToString());
   }
   auto rb_reader = std::move(rb_reader_result).ValueOrDie();
 
@@ -279,8 +272,7 @@ prepareParquetGroundTruths(const DataSet *dataset, size_t top_k1) {
   do {
     status = rb_reader->ReadNext(&recordBatch);
     if (!status.ok()) {
-      SPDLOG_ERROR("read next batch failed: {}", status.ToString());
-      std::exit(1);
+      throw std::runtime_error("read next batch failed: " + status.ToString());
     }
     if (recordBatch) {
       const auto &ids = parquetRowIds(*recordBatch);
@@ -322,18 +314,46 @@ prepareParquetGroundTruths(const DataSet *dataset, size_t top_k1) {
 }
 
 template <typename T>
-std::string
-percentile2str(Percentile<T> p,
-               const std::vector<std::pair<std::string, double>> &percentages) {
-  std::ostringstream oss;
-  oss << "best=" << p.best() << " worst=" << p.worst()
-      << " average=" << p.average();
-
-  for (auto it = percentages.begin(); it != percentages.end(); it++) {
-    oss << " P(" << it->first << "%)=" << p(it->second);
+DistributionResult summarize(
+    Percentile<T> &p, size_t count,
+    const std::vector<std::pair<std::string, double>> &percentages) {
+  DistributionResult result{count, static_cast<double>(p.best()),
+                             static_cast<double>(p.worst()), p.average(), {}};
+  for (const auto &[label, percentage] : percentages) {
+    result.percentiles.push_back(
+        {label, percentage, static_cast<double>(p(percentage))});
   }
+  return result;
+}
 
-  return oss.str();
+std::string metricName(DataSetMetric metric) {
+  switch (metric) {
+  case DataSetMetric::L1:
+    return "l1";
+  case DataSetMetric::L2:
+    return "l2";
+  case DataSetMetric::IP:
+    return "ip";
+  case DataSetMetric::COSINE:
+    return "cosine";
+  case DataSetMetric::HAMMING:
+    return "hamming";
+  case DataSetMetric::JACCARD:
+    return "jaccard";
+  }
+  throw std::runtime_error("unsupported dataset metric");
+}
+
+std::string formatName(DataSetFormat format) {
+  switch (format) {
+  case DataSetFormat::FVECS_FORMAT:
+    return "fvecs";
+  case DataSetFormat::BVECS_FORMAT:
+    return "bvecs";
+  case DataSetFormat::PARQUET_FORMAT:
+    return "parquet";
+  }
+  throw std::runtime_error("unsupported dataset format");
 }
 
 std::vector<std::string> generateQueryOptions(
@@ -357,9 +377,9 @@ std::vector<std::string> generateQueryOptions(
 
 } // namespace
 
-void query(
+QueryResult query(
     const DataSet *dataset, const ClientFactory *cf,
-    const std::unordered_map<std::string, std::string> &query_opt_map) try {
+    const std::unordered_map<std::string, std::string> &query_opt_map) {
   assert(dataset != nullptr);
   assert(cf != nullptr);
 
@@ -463,7 +483,7 @@ void query(
   for (size_t i = 0; i < thread_num; i++) {
     auto client = cf->createClient();
     if (!client) {
-      std::exit(1);
+      throw std::runtime_error("failed to connect a query worker");
     }
     clients.push_back(std::move(client));
   }
@@ -542,8 +562,8 @@ void query(
     threads[t].join();
   }
   if (failed) {
-    SPDLOG_ERROR("query benchmark failed; no statistics will be reported");
-    std::exit(1);
+    throw std::runtime_error(
+        "query benchmark failed; no statistics will be reported");
   }
 
   auto all_end = std::chrono::steady_clock::now();
@@ -574,12 +594,22 @@ void query(
 
   p_latencies.add(latencies.data(), vcount);
   p_recalls.add(recalls.data(), count);
-  SPDLOG_INFO("qps: {}", qps);
-  SPDLOG_INFO("latency(us): {}", percentile2str(p_latencies, percentages));
-  SPDLOG_INFO("recall: {}", percentile2str(p_recalls, percentages));
-} catch (const std::exception &error) {
-  SPDLOG_ERROR("query benchmark failed: {}", error.what());
-  std::exit(1);
+  QueryResult result;
+  result.dataset = {dataset->name_, formatName(dataset->format_),
+                     metricName(dataset->metric_), dataset->dim_,
+                     dataset->total_cnt_, count, dataset->gt_topk_};
+  result.config = {table_name.value_or(dataset->name_), dataset->vector_field_,
+                    top_k1, top_k2, thread_num, loop, {}};
+  for (const auto *name : {"hnsw.ef_search", "ivfflat.probes"}) {
+    if (auto value = Util::getValueFromMap(query_opt_map, name)) {
+      result.config.session_overrides.emplace(name, *value);
+    }
+  }
+  result.elapsed_seconds = elapsed;
+  result.qps = qps;
+  result.latency_us = summarize(p_latencies, vcount, percentages);
+  result.recall = summarize(p_recalls, count, percentages);
+  return result;
 }
 
 } // namespace pgvectorbench
