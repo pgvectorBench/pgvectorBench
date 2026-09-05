@@ -55,24 +55,26 @@ Datasets details:
 
 ### Prerequisite
 
-CMake 3.25 or newer and a C++20 compiler are required.
+CMake 3.25 or newer, Ninja, and a C++20 compiler are required. If `sccache` or
+`ccache` is available, CMake uses it automatically; `sccache` takes precedence.
 
 **MacOS**
 
 ```
-brew install cmake git libpq
+brew install cmake git libpq ninja sccache
 ```
 
 **Debian**
 
 ```
 sudo apt update
-sudo apt install -y cmake g++ git libpq-dev
+sudo apt install -y cmake g++ git libpq-dev ninja-build sccache
 ```
 
 ```
-cmake -S . -B build
-cmake --build build --parallel
+cmake --preset default
+cmake --build --preset default
+ctest --preset default
 ```
 
 CMake downloads and builds pinned Arrow, Parquet, argparse, concurrentqueue,
@@ -90,8 +92,8 @@ wget https://packages.apache.org/artifactory/arrow/$(lsb_release --id --short | 
 sudo apt install -y -V ./apache-arrow-apt-source-latest-$(lsb_release --codename --short).deb
 sudo apt update
 sudo apt install -y libparquet-dev
-cmake -S . -B build-system -DPGVECTORBENCH_USE_SYSTEM_ARROW=ON
-cmake --build build-system --parallel
+cmake --preset system-arrow
+cmake --build --preset system-arrow
 ```
 
 ## Build docker image

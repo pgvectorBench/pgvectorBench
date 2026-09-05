@@ -21,6 +21,8 @@ jobs:
     timeout-minutes: 60
     env:
       PGVECTORBENCH_TEST_DATABASE: postgres
+      SCCACHE_CACHE_SIZE: 2G
+      SCCACHE_DIR: ${{ github.workspace }}/.sccache
 
     strategy:
       fail-fast: false
@@ -39,6 +41,18 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Restore sccache cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.SCCACHE_DIR }}
+          key: >-
+            sccache-${{ runner.os }}-${{ matrix.build_type }}-${{ matrix.arrow_mode }}-${{ github.run_id }}
+          restore-keys: |
+            sccache-${{ runner.os }}-${{ matrix.build_type }}-${{ matrix.arrow_mode }}-
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
 
       - name: Install build dependencies
         shell: bash
@@ -67,12 +81,14 @@ jobs:
 
       - name: Configure
         run: >-
-          cmake -S . -B build -G Ninja
+          cmake --preset default
           -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
           -DPGVECTORBENCH_USE_SYSTEM_ARROW=${{ matrix.use_system_arrow }}
+          -DCMAKE_C_COMPILER_LAUNCHER=sccache
+          -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
 
       - name: Build
-        run: cmake --build build --parallel 2
+        run: cmake --build --preset default --parallel 2
 
       - name: Run tests
         run: ctest --test-dir build --output-on-failure --no-tests=error
@@ -82,16 +98,41 @@ jobs:
           ./build/pgvectorbench --version
           ./build/pgvectorbench --help
 
+      - name: Show sccache statistics
+        if: always()
+        run: sccache --show-stats
+
+      - name: Save sccache cache
+        if: github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.SCCACHE_DIR }}
+          key: >-
+            sccache-${{ runner.os }}-${{ matrix.build_type }}-${{ matrix.arrow_mode }}-${{ github.run_id }}
+
   macos:
     name: Build (macOS 15)
     runs-on: macos-15
     timeout-minutes: 30
     env:
       PGVECTORBENCH_TEST_DATABASE: postgres
+      SCCACHE_CACHE_SIZE: 2G
+      SCCACHE_DIR: ${{ github.workspace }}/.sccache
 
     steps:
       - name: Check out repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Restore sccache cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.SCCACHE_DIR }}
+          key: sccache-${{ runner.os }}-Release-vendored-${{ github.run_id }}
+          restore-keys: |
+            sccache-${{ runner.os }}-Release-vendored-
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
 
       - name: Install build dependencies
         run: |
@@ -112,13 +153,15 @@ jobs:
 
       - name: Configure
         run: >-
-          cmake -S . -B build -G Ninja
+          cmake --preset default
           -DCMAKE_BUILD_TYPE=Release
           -DCMAKE_PREFIX_PATH="$(brew --prefix postgresql@17)"
           -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+          -DCMAKE_C_COMPILER_LAUNCHER=sccache
+          -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
 
       - name: Build
-        run: cmake --build build --parallel 2
+        run: cmake --build --preset default --parallel 2
 
       - name: Run tests
         run: ctest --test-dir build --output-on-failure --no-tests=error
@@ -127,3 +170,14 @@ jobs:
         run: |
           ./build/pgvectorbench --version
           ./build/pgvectorbench --help
+
+      - name: Show sccache statistics
+        if: always()
+        run: sccache --show-stats
+
+      - name: Save sccache cache
+        if: github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.SCCACHE_DIR }}
+          key: sccache-${{ runner.os }}-Release-vendored-${{ github.run_id }}
