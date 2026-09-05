@@ -27,7 +27,14 @@ public:
 
   virtual void start() = 0;
 
-  virtual void wait_for_finish() { thread_pool_->wait_all_tasks_finished(); }
+  virtual void wait_for_finish() {
+    thread_pool_->wait_all_tasks_finished();
+    for (auto &task : tasks_) {
+      if (task.valid()) {
+        task.get();
+      }
+    }
+  }
 
 protected:
   const DataSet *dataset_;
@@ -35,6 +42,7 @@ protected:
   size_t thread_num_;
 
   std::unique_ptr<ThreadPool> thread_pool_;
+  std::vector<std::future<void>> tasks_;
 };
 
 template <typename DataType> class VecsDataSource : public DataSource {
@@ -67,11 +75,14 @@ public:
 
       size_t begin = 0;
       size_t filesize = reader->filesize();
-      assert(filesize == base_file.second * rowsize);
+      if (filesize != base_file.second * rowsize || filesize == 0) {
+        throw std::runtime_error("Unexpected VECS file size: " + file_path);
+      }
       while (begin + step < filesize) {
 
         // NB: pass reader pointer to lamda here
-        thread_pool_->enqueue([&, begin, step, total_row, rd = reader.get()]() {
+        tasks_.push_back(thread_pool_->enqueue([&, begin, step, total_row,
+                                                rd = reader.get()]() {
           auto thread_id_ = get_thread_id();
           assert(thread_id_ < thread_num_);
 
@@ -82,11 +93,9 @@ public:
 
           VecsBlock block(buffer, total_row, batch_size_, dataset_);
           if (!convert_(&block)) {
-            failed_block_num.fetch_add(1);
-            SPDLOG_ERROR("bad convertion begin pos: {}, length: {}", begin,
-                         step);
+            throw std::runtime_error("Failed to convert VECS block");
           }
-        });
+        }));
         begin += step;
         total_row += batch_size_;
       }
@@ -94,8 +103,9 @@ public:
       // last block
       assert(begin < filesize);
       // NB: pass reader pointer to lamda here
-      thread_pool_->enqueue([&, begin, step = filesize - begin, total_row,
-                             rowsize, rd = reader.get()]() {
+      tasks_.push_back(thread_pool_->enqueue([&, begin, step = filesize - begin,
+                                              total_row, rowsize,
+                                              rd = reader.get()]() {
         auto thread_id_ = get_thread_id();
         assert(thread_id_ < thread_num_);
 
@@ -105,10 +115,9 @@ public:
         rd->read(buffer, step, begin);
         VecsBlock block(buffer, total_row, step / rowsize, dataset_);
         if (!convert_(&block)) {
-          failed_block_num.fetch_add(1);
-          SPDLOG_ERROR("bad convertion begin pos: {}, length: {}", begin, step);
+          throw std::runtime_error("Failed to convert VECS block");
         }
-      });
+      }));
       total_row += (filesize - begin) / rowsize;
     }
 
@@ -122,9 +131,6 @@ private:
     thread_local int thread_id{cnt++};
     return thread_id;
   }
-
-  // record how many blocks failed due to bad convertion
-  std::atomic<size_t> failed_block_num{0};
 
   std::vector<std::string> buffers_;
   std::function<bool(VecsBlock *block)> convert_;
@@ -158,8 +164,9 @@ public:
     for (const auto &base_file : dataset_->base_files_) {
       auto file_path = dataset_->location_ + base_file.first;
 
-      thread_pool_->enqueue([&, file_path, batch_size = batch_size_,
-                             file_row_num = base_file.second]() {
+      tasks_.push_back(thread_pool_->enqueue([&, file_path,
+                                              batch_size = batch_size_,
+                                              file_row_num = base_file.second]() {
         arrow::MemoryPool *pool = arrow::default_memory_pool();
         // general Parquet reader settings
         auto reader_properties = parquet::ReaderProperties(pool);
@@ -174,8 +181,8 @@ public:
         auto status = reader_builder.OpenFile(file_path, /*memory_map*/ false,
                                               reader_properties);
         if (!status.ok()) {
-          SPDLOG_ERROR("open file failed: {}", status.ToString());
-          return;
+          throw std::runtime_error("Open Parquet file failed: " +
+                                   status.ToString());
         }
         reader_builder.memory_pool(pool);
         reader_builder.properties(arrow_reader_props);
@@ -183,15 +190,14 @@ public:
         std::unique_ptr<parquet::arrow::FileReader> arrow_reader;
         status = reader_builder.Build(&arrow_reader);
         if (!status.ok()) {
-          SPDLOG_ERROR("build arrow reader failed: {}", status.ToString());
-          return;
+          throw std::runtime_error("Build Arrow reader failed: " +
+                                   status.ToString());
         }
 
         auto rb_reader_result = arrow_reader->GetRecordBatchReader();
         if (!rb_reader_result.ok()) {
-          SPDLOG_ERROR("get record batch reader failed: {}",
-                       rb_reader_result.status().ToString());
-          return;
+          throw std::runtime_error("Get record batch reader failed: " +
+                                   rb_reader_result.status().ToString());
         }
         auto rb_reader = std::move(rb_reader_result).ValueOrDie();
 
@@ -200,21 +206,22 @@ public:
         do {
           status = rb_reader->ReadNext(&recordBatch);
           if (!status.ok()) {
-            SPDLOG_ERROR("read next batch failed: {}", status.ToString());
-            break;
+            throw std::runtime_error("Read next batch failed: " +
+                                     status.ToString());
           }
           if (recordBatch) {
             if (!convert_(recordBatch, dataset_)) {
-              SPDLOG_ERROR("failed to handle recordBatch after handle {} "
-                           "number of rows");
+              throw std::runtime_error("Failed to convert Parquet record batch");
             }
             total_row += recordBatch->num_rows();
           }
 
         } while (recordBatch);
 
-        assert(total_row = file_row_num);
-      });
+        if (total_row != file_row_num) {
+          throw std::runtime_error("Unexpected Parquet row count: " + file_path);
+        }
+      }));
     }
   }
 
