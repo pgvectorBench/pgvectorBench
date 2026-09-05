@@ -1,6 +1,10 @@
 #include <atomic>
+#include <charconv>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
+#include <cstring>
+#include <limits>
 #include <memory>
 #include <sstream>
 #include <thread>
@@ -15,6 +19,7 @@
 #include <ryu/ryu.h>
 
 #include "dataset/dataset.h"
+#include "dataset/parquet_embedding.h"
 #include "dataset/parquet_ground_truth.h"
 #include "utils/client_factory.h"
 #include "utils/file_reader.h"
@@ -38,7 +43,9 @@ prepareVecsQueries(const DataSet *dataset,
   const size_t filesize = reader->filesize();
   const size_t rowsize = sizeof(uint32_t) + dataset->dim_ * sizeof(DataType);
   const size_t rowcnt = dataset->query_file_.second;
-  assert(filesize == rowsize * rowcnt);
+  if (filesize % rowsize != 0 || filesize / rowsize != rowcnt) {
+    throw std::runtime_error("VECS query file size does not match dataset");
+  }
 
   std::vector<std::string> queries;
   queries.reserve(rowcnt);
@@ -58,14 +65,19 @@ prepareVecsQueries(const DataSet *dataset,
 
   for (size_t i = 0; i < rowcnt; i++) {
     reader->read(buffer, rowsize, rowsize * i);
-    uint32_t dim = *((uint32_t *)buffer);
-    assert(dim = dataset->dim_);
+    uint32_t dim;
+    std::memcpy(&dim, buffer, sizeof(dim));
+    if (dim != dataset->dim_) {
+      throw std::runtime_error("VECS query dimension does not match dataset");
+    }
 
     oss << "'[";
-    DataType *vecs = (DataType *)(buffer + sizeof(uint32_t));
     if constexpr (std::is_same_v<DataType, float>) {
       for (size_t j = 0; j < dim; j++) {
-        f2s_buffered(vecs[j], result);
+        float value;
+        std::memcpy(&value, buffer + sizeof(dim) + j * sizeof(value),
+                    sizeof(value));
+        f2s_buffered(value, result);
         oss << result;
         if (j != dim - 1) {
           oss << ',';
@@ -73,7 +85,8 @@ prepareVecsQueries(const DataSet *dataset,
       }
     } else {
       for (size_t j = 0; j < dim; j++) {
-        oss << vecs[j];
+        oss << static_cast<unsigned int>(
+            static_cast<uint8_t>(buffer[sizeof(dim) + j]));
         if (j != dim - 1) {
           oss << ',';
         }
@@ -91,16 +104,21 @@ prepareVecsQueries(const DataSet *dataset,
 
 std::vector<std::vector<int64_t>> prepareVecsGroudTruths(const DataSet *dataset,
                                                          size_t top_k1) {
-  assert(top_k1 <= dataset->gt_topk_);
+  if (top_k1 == 0 || top_k1 > dataset->gt_topk_) {
+    throw std::runtime_error("invalid ground-truth top_k");
+  }
   // ground truth file path
   auto file_path = dataset->location_ + dataset->gt_file_.first;
   std::unique_ptr<util::FileReader> reader =
       std::make_unique<util::FileReader>(file_path);
   reader->open();
   const size_t filesize = reader->filesize();
-  const size_t rowsize = sizeof(uint32_t) + sizeof(int) * dataset->gt_topk_;
+  const size_t rowsize = sizeof(uint32_t) + sizeof(int32_t) * dataset->gt_topk_;
   const size_t rowcnt = dataset->gt_file_.second;
-  assert(filesize == rowsize * rowcnt);
+  if (filesize % rowsize != 0 || filesize / rowsize != rowcnt) {
+    throw std::runtime_error(
+        "VECS ground-truth file size does not match dataset");
+  }
   std::vector<std::vector<int64_t>> gts(rowcnt, std::vector<int64_t>(top_k1));
 
   std::string buffer_(rowsize, ' ');
@@ -108,12 +126,17 @@ std::vector<std::vector<int64_t>> prepareVecsGroudTruths(const DataSet *dataset,
 
   for (size_t i = 0; i < rowcnt; i++) {
     reader->read(buffer, rowsize, rowsize * i);
-    uint32_t dim = *((uint32_t *)buffer);
-    assert(dim = dataset->dim_);
-    assert(dim > top_k1);
-    int *vecs = (int *)(buffer + sizeof(uint32_t));
-    for (int j = 0; j < top_k1; j++) {
-      gts[i][j] = vecs[j];
+    uint32_t dim;
+    std::memcpy(&dim, buffer, sizeof(dim));
+    if (dim != dataset->gt_topk_) {
+      throw std::runtime_error(
+          "VECS ground-truth dimension does not match top_k");
+    }
+    for (size_t j = 0; j < top_k1; j++) {
+      int32_t neighbor;
+      std::memcpy(&neighbor, buffer + sizeof(dim) + j * sizeof(neighbor),
+                  sizeof(neighbor));
+      gts[i][j] = neighbor;
     }
     std::sort(gts[i].begin(), gts[i].end());
   }
@@ -157,10 +180,8 @@ prepareParquetQueries(const DataSet *dataset,
   }
   auto rb_reader = std::move(rb_reader_result).ValueOrDie();
 
-  std::vector<std::string> queries;
-  queries.reserve(dataset->query_file_.second);
-  char result[40]; // used for converting floating / double floating point
-                   // numbers to decimal strings
+  std::vector<std::string> queries(dataset->query_file_.second);
+  size_t rows = 0;
 
   std::ostringstream oss;
   oss << "SELECT id FROM "
@@ -188,59 +209,36 @@ prepareParquetQueries(const DataSet *dataset,
       std::exit(1);
     }
     if (recordBatch) {
-      auto id_array =
-          std::static_pointer_cast<arrow::Int64Array>(recordBatch->column(0));
-      auto list_array =
-          std::static_pointer_cast<arrow::ListArray>(recordBatch->column(1));
-      size_t begin = 0;
-      if constexpr (std::is_same_v<DataType, float>) {
-        auto float_array =
-            std::static_pointer_cast<arrow::FloatArray>(list_array->values());
-        for (size_t i = 0; i < recordBatch->num_rows(); i++) {
-          oss << "'[";
-          size_t end = begin + dataset->dim_;
-          for (int j = begin; j < end; j++) {
-            f2s_buffered(float_array->Value(j), result);
-            oss << result;
-            if (j != end - 1) {
-              oss << ",";
-            }
-          }
-          oss << "]' LIMIT " << top_k2 << ";";
-          begin = end;
-          queries.push_back(oss.str());
-          oss.str("");
-          oss << sql_prefix;
+      const auto &ids = parquetRowIds(*recordBatch);
+      for (int64_t i = 0; i < recordBatch->num_rows(); ++i) {
+        if (ids.IsNull(i) || ids.Value(i) < 0 ||
+            static_cast<size_t>(ids.Value(i)) >= queries.size()) {
+          throw std::runtime_error("query row id is null or out of range");
         }
-      } else {
-        auto double_array =
-            std::static_pointer_cast<arrow::DoubleArray>(list_array->values());
-        for (size_t i = 0; i < recordBatch->num_rows(); i++) {
-          oss << "'[";
-          size_t end = begin + dataset->dim_;
-          for (int j = begin; j < end; j++) {
-            d2s_buffered(double_array->Value(j), result);
-            oss << result;
-            if (j != end - 1) {
-              oss << ",";
-            }
-          }
-          oss << "]' LIMIT " << top_k2 << ";";
-          begin = end;
-          queries.push_back(oss.str());
-          oss.str("");
-          oss << sql_prefix;
+        auto &sql = queries[ids.Value(i)];
+        if (!sql.empty()) {
+          throw std::runtime_error("duplicate query row id");
         }
+        sql = sql_prefix + "'" +
+              formatParquetEmbedding<DataType>(*recordBatch->column(1), i,
+                                               dataset->dim_) +
+              "' LIMIT " + std::to_string(top_k2) + ";";
+        ++rows;
       }
     }
   } while (recordBatch);
 
+  if (rows != queries.size()) {
+    throw std::runtime_error("Parquet query row count does not match dataset");
+  }
   return queries;
 }
 
 std::vector<std::vector<int64_t>>
 prepareParquetGroundTruths(const DataSet *dataset, size_t top_k1) {
-  assert(top_k1 <= dataset->gt_topk_);
+  if (top_k1 == 0 || top_k1 > dataset->gt_topk_) {
+    throw std::runtime_error("invalid ground-truth top_k");
+  }
   // ground truth file path
   auto file_path = dataset->location_ + dataset->gt_file_.first;
   arrow::MemoryPool *pool = arrow::default_memory_pool();
@@ -274,6 +272,8 @@ prepareParquetGroundTruths(const DataSet *dataset, size_t top_k1) {
 
   std::vector<std::vector<int64_t>> gts(dataset->gt_file_.second,
                                         std::vector<int64_t>(top_k1));
+  std::vector<bool> seen(gts.size(), false);
+  size_t rows = 0;
 
   std::shared_ptr<arrow::RecordBatch> recordBatch;
   do {
@@ -283,15 +283,23 @@ prepareParquetGroundTruths(const DataSet *dataset, size_t top_k1) {
       std::exit(1);
     }
     if (recordBatch) {
-      auto id_array =
-          std::static_pointer_cast<arrow::Int64Array>(recordBatch->column(0));
+      const auto &ids = parquetRowIds(*recordBatch);
       auto neighbors = recordBatch->column(1);
       auto copy_rows = [&](const auto &list_array) {
         auto int_array =
-            std::static_pointer_cast<arrow::Int64Array>(list_array.values());
+            std::dynamic_pointer_cast<arrow::Int64Array>(list_array.values());
+        if (!int_array) {
+          throw std::runtime_error("ground-truth neighbors must be int64");
+        }
         for (int64_t i = 0; i < recordBatch->num_rows(); i++) {
-          copyParquetGroundTruthRow(*id_array, list_array, *int_array, i,
-                                    top_k1, gts);
+          copyParquetGroundTruthRow(ids, list_array, *int_array, i, top_k1,
+                                    gts);
+          const auto id = ids.Value(i); // range checked by the row copier
+          if (seen[id]) {
+            throw std::runtime_error("duplicate ground-truth row id");
+          }
+          seen[id] = true;
+          ++rows;
         }
       };
 
@@ -306,6 +314,10 @@ prepareParquetGroundTruths(const DataSet *dataset, size_t top_k1) {
     }
   } while (recordBatch);
 
+  if (rows != gts.size()) {
+    throw std::runtime_error(
+        "Parquet ground-truth row count does not match dataset");
+  }
   return gts;
 }
 
@@ -345,30 +357,70 @@ std::vector<std::string> generateQueryOptions(
 
 } // namespace
 
-void query(const DataSet *dataset, const ClientFactory *cf,
-           const std::unordered_map<std::string, std::string> &query_opt_map) {
+void query(
+    const DataSet *dataset, const ClientFactory *cf,
+    const std::unordered_map<std::string, std::string> &query_opt_map) try {
   assert(dataset != nullptr);
   assert(cf != nullptr);
 
-  // Find k2 nearest neighbors for each query vector, recall rate is k1@k2
-  auto top_k1_opt = Util::getValueFromMap(query_opt_map, "k1");
-  auto top_k2_opt = Util::getValueFromMap(query_opt_map, "k2");
-
-  size_t top_k2 = dataset->gt_topk_;
-  if (top_k2_opt.has_value()) {
-    top_k2 = std::stol(top_k2_opt.value());
-    if (top_k2 > dataset->gt_topk_ || top_k2 <= 0) {
-      SPDLOG_ERROR("Illegal k2 value: {}", top_k2);
-      std::exit(1);
+  auto positive_option = [&](const char *name, size_t fallback,
+                             size_t maximum) {
+    auto value = Util::getValueFromMap(query_opt_map, name);
+    if (!value) {
+      return fallback;
     }
-  }
+    size_t parsed = 0;
+    const auto [end, error] =
+        std::from_chars(value->data(), value->data() + value->size(), parsed);
+    if (error != std::errc{} || end != value->data() + value->size() ||
+        parsed == 0 || parsed > maximum) {
+      throw std::runtime_error(fmt::format(
+          "Invalid query option {}={}: expected an integer from 1 to {}", name,
+          *value, maximum));
+    }
+    return parsed;
+  };
 
-  size_t top_k1 = top_k2;
-  if (top_k1_opt.has_value()) {
-    top_k1 = std::stol(top_k1_opt.value());
-    if (top_k1 > top_k2 || top_k1 <= 0 || top_k1 > dataset->gt_topk_) {
-      SPDLOG_ERROR("Illegal k1 value: {}", top_k1);
-      std::exit(1);
+  if (dataset->query_file_.second == 0 ||
+      dataset->query_file_.second != dataset->gt_file_.second ||
+      dataset->gt_topk_ == 0 || dataset->dim_ == 0) {
+    throw std::runtime_error(
+        "query and ground-truth counts must match and be nonzero");
+  }
+  // Find k2 nearest neighbors for each query vector, recall rate is k1@k2.
+  const size_t top_k2 =
+      positive_option("k2", dataset->gt_topk_, dataset->gt_topk_);
+  const size_t top_k1 = positive_option("k1", top_k2, top_k2);
+  const size_t thread_num = positive_option(
+      "thread_num",
+      size_t(std::max(1u, std::thread::hardware_concurrency())) * 2,
+      std::numeric_limits<int>::max());
+  const size_t count = dataset->query_file_.second;
+  const size_t loop =
+      positive_option("loop", 1, std::vector<uint32_t>().max_size() / count);
+  const size_t vcount = count * loop;
+
+  std::vector<std::pair<std::string, double>> percentages;
+  if (auto pct = Util::getValueFromMap(query_opt_map, "percentages")) {
+    // Do not silently discard empty fields or partially parsed numbers.
+    std::istringstream input(*pct);
+    std::string token;
+    if (pct->empty() || pct->back() == ',') {
+      throw std::runtime_error("Invalid query option percentages");
+    }
+    while (std::getline(input, token, ',')) {
+      size_t end = 0;
+      double value;
+      try {
+        value = std::stod(token, &end);
+      } catch (const std::exception &) {
+        throw std::runtime_error("Invalid query option percentages");
+      }
+      if (end != token.size() || !std::isfinite(value) || value < 0 ||
+          value > 100) {
+        throw std::runtime_error("Invalid query option percentages");
+      }
+      percentages.emplace_back(token, value);
     }
   }
 
@@ -393,37 +445,11 @@ void query(const DataSet *dataset, const ClientFactory *cf,
     gts = prepareParquetGroundTruths(dataset, top_k1);
   }
 
-  size_t thread_num = std::thread::hardware_concurrency() * 2;
-  // parse thread num
-  auto tn = Util::getValueFromMap(query_opt_map, "thread_num");
-  if (tn.has_value()) {
-    thread_num = std::stoul(tn.value());
+  if (queries.size() != count || gts.size() != count) {
+    throw std::runtime_error(
+        "query and ground-truth counts do not match dataset");
   }
-
-  // parse loop
-  size_t loop = 1;
-  auto lp = Util::getValueFromMap(query_opt_map, "loop");
-  if (lp.has_value()) {
-    loop = std::stoul(lp.value());
-  }
-
-  // parse percentages
-  std::vector<std::pair<std::string, double>> percentages;
-  auto pct = Util::getValueFromMap(query_opt_map, "percentages");
-  if (pct.has_value()) {
-    CSVParser::parseLine(*pct, [&](std::string &token) {
-      double val = std::stod(token);
-      percentages.emplace_back(token, val);
-    });
-  }
-
-  // generate query options sql
   std::vector<std::string> queryOptions = generateQueryOptions(query_opt_map);
-
-  // count of generated queries
-  const size_t count = queries.size();
-  // execute loop times for all queries
-  const size_t vcount = count * loop;
 
   Percentile<uint32_t> p_latencies(true);
   Percentile<float> p_recalls(false);
@@ -445,7 +471,7 @@ void query(const DataSet *dataset, const ClientFactory *cf,
   std::vector<std::thread> threads;
   std::atomic<size_t> cursor{0};
   std::atomic<bool> failed{false};
-  auto all_start = std::chrono::high_resolution_clock::now();
+  auto all_start = std::chrono::steady_clock::now();
   for (size_t i = 0; i < thread_num; i++) {
     threads.emplace_back([&, client = std::move(clients[i])]() {
       // set query options if necessary
@@ -470,22 +496,33 @@ void query(const DataSet *dataset, const ClientFactory *cf,
         }
         size_t q_idx = idx % count;
 
-        auto start = std::chrono::high_resolution_clock::now();
+        auto start = std::chrono::steady_clock::now();
         auto ret = client->executeQuery(
             queries[q_idx].c_str(), [&](PGresult *res) -> bool {
               // Only the final iteration owns this query's recall results.
               if (idx < vcount - count) {
                 return true;
               }
+              if (PQnfields(res) != 1) {
+                SPDLOG_ERROR("query must return one id column");
+                return false;
+              }
               int num_rows = PQntuples(res);
               labels[q_idx].resize(num_rows);
               for (int j = 0; j < num_rows; j++) {
-                const char *int_value_str = PQgetvalue(res, j, 0);
-                labels[q_idx][j] = std::stoi(int_value_str);
+                const char *value = PQgetvalue(res, j, 0);
+                const char *last = value + PQgetlength(res, j, 0);
+                const auto [end, error] =
+                    std::from_chars(value, last, labels[q_idx][j]);
+                if (PQgetisnull(res, j, 0) || error != std::errc{} ||
+                    end != last) {
+                  SPDLOG_ERROR("query result id must be a non-null int64");
+                  return false;
+                }
               }
               return true;
             });
-        auto end = std::chrono::high_resolution_clock::now();
+        auto end = std::chrono::steady_clock::now();
         uint32_t microseconds =
             (std::chrono::duration_cast<std::chrono::microseconds>)(end - start)
                 .count();
@@ -509,12 +546,10 @@ void query(const DataSet *dataset, const ClientFactory *cf,
     std::exit(1);
   }
 
-  auto all_end = std::chrono::high_resolution_clock::now();
-  double qps =
-      1000000.0f * vcount /
-      ((std::chrono::duration_cast<std::chrono::microseconds>)(all_end -
-                                                               all_start)
-           .count());
+  auto all_end = std::chrono::steady_clock::now();
+  const double elapsed =
+      std::chrono::duration<double>(all_end - all_start).count();
+  const double qps = vcount / std::max(elapsed, 1e-9);
 
   // calculate recalls
   for (size_t i = 0; i < count; i++) {
@@ -523,10 +558,9 @@ void query(const DataSet *dataset, const ClientFactory *cf,
     const auto &gs = gts[i];
     size_t ig = 0, il = 0, correct = 0;
     while (ig < top_k1 && il < ls.size()) {
-      int64_t diff = gs[ig] - ls[il];
-      if (diff < 0) {
+      if (gs[ig] < ls[il]) {
         ig++;
-      } else if (diff > 0) {
+      } else if (gs[ig] > ls[il]) {
         il++;
       } else {
         ig++;
@@ -543,6 +577,9 @@ void query(const DataSet *dataset, const ClientFactory *cf,
   SPDLOG_INFO("qps: {}", qps);
   SPDLOG_INFO("latency(us): {}", percentile2str(p_latencies, percentages));
   SPDLOG_INFO("recall: {}", percentile2str(p_recalls, percentages));
+} catch (const std::exception &error) {
+  SPDLOG_ERROR("query benchmark failed: {}", error.what());
+  std::exit(1);
 }
 
 } // namespace pgvectorbench

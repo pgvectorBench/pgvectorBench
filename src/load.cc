@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <charconv>
 #include <cstdlib>
+#include <cstring>
 #include <iomanip>
 #include <limits>
 #include <memory>
@@ -18,6 +19,7 @@
 
 #include "dataset/dataset.h"
 #include "dataset/datasource.h"
+#include "dataset/parquet_embedding.h"
 #include "utils/client_factory.h"
 #include "utils/parser.h"
 #include "utils/util.h"
@@ -62,13 +64,18 @@ std::string VecsToCopyContent(const VecsBlock *block) {
       oss << '\n';
     }
     oss << block->start_id_ + i << " | [";
-    uint32_t dim = *(uint32_t *)(block->buffer_ + rowsize * i);
-    assert(dim == ds_dim);
-    DataType *vecs =
-        (DataType *)(block->buffer_ + rowsize * i + sizeof(uint32_t));
+    uint32_t dim;
+    const char *row = block->buffer_ + rowsize * i;
+    std::memcpy(&dim, row, sizeof(dim));
+    if (dim != ds_dim) {
+      throw std::runtime_error("VECS vector dimension does not match dataset");
+    }
     if constexpr (std::is_same_v<DataType, float>) {
       for (size_t j = 0; j < dim; j++) {
-        f2s_buffered(vecs[j], result);
+        float value;
+        std::memcpy(&value, row + sizeof(dim) + j * sizeof(value),
+                    sizeof(value));
+        f2s_buffered(value, result);
         oss << result;
         if (j != dim - 1) {
           oss << ",";
@@ -76,7 +83,8 @@ std::string VecsToCopyContent(const VecsBlock *block) {
       }
     } else {
       for (size_t j = 0; j < dim; j++) {
-        oss << vecs[j];
+        oss << static_cast<unsigned int>(
+            static_cast<uint8_t>(row[sizeof(dim) + j]));
         if (j != dim - 1) {
           oss << ",";
         }
@@ -91,63 +99,19 @@ std::string VecsToCopyContent(const VecsBlock *block) {
 template <typename DataType>
 std::string RecordBatchToCopyContent(std::shared_ptr<arrow::RecordBatch> &batch,
                                      const DataSet *dataset) {
-  auto id_array = std::static_pointer_cast<arrow::Int64Array>(batch->column(0));
-  auto list_array =
-      std::static_pointer_cast<arrow::ListArray>(batch->column(1));
-
+  const auto &ids = parquetRowIds(*batch);
   std::ostringstream oss;
-  bool flag = true;
-  size_t begin = 0;
-  if constexpr (std::is_same_v<DataType, float>) {
-    auto float_array =
-        std::static_pointer_cast<arrow::FloatArray>(list_array->values());
-
-    char result[16]; // used for converting floating point numbers to decimal
-
-    // strings
-    for (size_t i = 0; i < batch->num_rows(); i++) {
-      if (flag) {
-        flag = false;
-      } else {
-        oss << '\n';
-      }
-      oss << id_array->Value(i) << " | [";
-      size_t end = begin + dataset->dim_;
-      for (int j = begin; j < end; j++) {
-        f2s_buffered(float_array->Value(j), result);
-        oss << result;
-        if (j != end - 1) {
-          oss << ",";
-        }
-      }
-      oss << "]";
-      begin = end;
+  for (int64_t i = 0; i < batch->num_rows(); ++i) {
+    if (ids.IsNull(i)) {
+      throw std::runtime_error("Parquet row ids must not be null");
     }
-  } else {
-    auto double_array =
-        std::static_pointer_cast<arrow::DoubleArray>(list_array->values());
-    char result[40]; // used for converting double floating point numbers to
-                     // decimal strings
-    for (size_t i = 0; i < batch->num_rows(); i++) {
-      if (flag) {
-        flag = false;
-      } else {
-        oss << '\n';
-      }
-      oss << id_array->Value(i) << " | [";
-      size_t end = begin + dataset->dim_;
-      for (int j = begin; j < end; j++) {
-        d2s_buffered(double_array->Value(j), result);
-        oss << result;
-        if (j != end - 1) {
-          oss << ",";
-        }
-      }
-      oss << "]";
-      begin = end;
+    if (i != 0) {
+      oss << '\n';
     }
+    oss << ids.Value(i) << " | "
+        << formatParquetEmbedding<DataType>(*batch->column(1), i,
+                                            dataset->dim_);
   }
-
   return oss.str();
 }
 
