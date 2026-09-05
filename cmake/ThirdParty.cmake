@@ -62,6 +62,9 @@ else()
   set(ARROW_PARQUET ON CACHE BOOL "" FORCE)
   set(ARROW_MIMALLOC OFF CACHE BOOL "" FORCE)
   set(ARROW_JEMALLOC OFF CACHE BOOL "" FORCE)
+  # The supported Zilliz benchmark Parquet files use ZSTD. Keep Arrow's other
+  # optional codecs disabled to avoid vendoring dependencies the benchmark
+  # does not need.
   set(ARROW_WITH_ZSTD ON CACHE BOOL "" FORCE)
 
   FetchContent_Declare(
