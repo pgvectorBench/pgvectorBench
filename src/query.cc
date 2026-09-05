@@ -1,5 +1,6 @@
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <memory>
 #include <sstream>
 #include <thread>
@@ -428,8 +429,8 @@ void query(const DataSet *dataset, const ClientFactory *cf,
   Percentile<float> p_recalls(false);
   std::vector<uint32_t> latencies(vcount, 0);
   std::vector<float> recalls(count, 0.0);
-  // each query return top_k2 ann
-  std::vector<std::vector<int64_t>> labels(count, std::vector<int64_t>(top_k2));
+  // Store only the neighbors actually returned by each query.
+  std::vector<std::vector<int64_t>> labels(count);
 
   // Validate every connection before starting query workers.
   std::vector<std::unique_ptr<Client>> clients;
@@ -443,6 +444,7 @@ void query(const DataSet *dataset, const ClientFactory *cf,
 
   std::vector<std::thread> threads;
   std::atomic<size_t> cursor{0};
+  std::atomic<bool> failed{false};
   auto all_start = std::chrono::high_resolution_clock::now();
   for (size_t i = 0; i < thread_num; i++) {
     threads.emplace_back([&, client = std::move(clients[i])]() {
@@ -457,9 +459,11 @@ void query(const DataSet *dataset, const ClientFactory *cf,
             });
         if (!ret) {
           SPDLOG_ERROR("failed to execute: {}", queryOption);
+          failed = true;
+          return;
         }
       }
-      while (true) {
+      while (!failed) {
         size_t idx = cursor.fetch_add(1);
         if (idx >= vcount) {
           break;
@@ -474,6 +478,7 @@ void query(const DataSet *dataset, const ClientFactory *cf,
                 return true;
               }
               int num_rows = PQntuples(res);
+              labels[q_idx].resize(num_rows);
               for (int j = 0; j < num_rows; j++) {
                 const char *int_value_str = PQgetvalue(res, j, 0);
                 labels[q_idx][j] = std::stoi(int_value_str);
@@ -489,6 +494,8 @@ void query(const DataSet *dataset, const ClientFactory *cf,
                      microseconds);
         if (!ret) {
           SPDLOG_ERROR("failed to excute query {}", queries[q_idx]);
+          failed = true;
+          break;
         }
       }
     });
@@ -496,6 +503,10 @@ void query(const DataSet *dataset, const ClientFactory *cf,
 
   for (size_t t = 0; t < thread_num; t++) {
     threads[t].join();
+  }
+  if (failed) {
+    SPDLOG_ERROR("query benchmark failed; no statistics will be reported");
+    std::exit(1);
   }
 
   auto all_end = std::chrono::high_resolution_clock::now();
@@ -511,7 +522,7 @@ void query(const DataSet *dataset, const ClientFactory *cf,
     const auto &ls = labels[i];
     const auto &gs = gts[i];
     size_t ig = 0, il = 0, correct = 0;
-    while (ig < top_k1 && il < top_k2) {
+    while (ig < top_k1 && il < ls.size()) {
       int64_t diff = gs[ig] - ls[il];
       if (diff < 0) {
         ig++;
