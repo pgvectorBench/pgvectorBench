@@ -203,6 +203,16 @@ void load(const DataSet *dataset, const ClientFactory *cf,
   auto table_name = Util::getValueFromMap(load_opt_map, "table_name");
   auto copy_table_statement = generateCopyTableStatement(dataset, table_name);
 
+  // Validate every connection before starting producers or consumers.
+  std::vector<std::unique_ptr<Client>> clients;
+  for (size_t i = 0; i < client_num; i++) {
+    auto client = cf->createClient();
+    if (!client) {
+      std::exit(1);
+    }
+    clients.push_back(std::move(client));
+  }
+
   ConcurrentQueue<std::string> sql_queue;   // lock free MPMC
   LightweightSemaphore sem(queue_capacity); // use this to limit sql_queue size
 
@@ -283,8 +293,7 @@ void load(const DataSet *dataset, const ClientFactory *cf,
 
   std::vector<std::thread> threads;
   for (size_t i = 0; i < client_num; i++) {
-    threads.emplace_back([&]() {
-      auto client = cf->createClient();
+    threads.emplace_back([&, client = std::move(clients[i])]() {
       std::string ele;
       while (!finished.load() || sem.availableApprox() != queue_capacity) {
         if (sql_queue.try_dequeue(ele)) {

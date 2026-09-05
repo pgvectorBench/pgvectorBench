@@ -55,7 +55,9 @@ void teardown(
   assert(cf != nullptr);
 
   auto client = cf->createClient();
-  assert(client != nullptr);
+  if (!client) {
+    std::exit(1);
+  }
 
   auto table_name = Util::getValueFromMap(teardown_opt_map, "table_name");
   auto truncate = Util::getValueFromMap(teardown_opt_map, "truncate");

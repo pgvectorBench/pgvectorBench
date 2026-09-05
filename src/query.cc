@@ -431,12 +431,21 @@ void query(const DataSet *dataset, const ClientFactory *cf,
   // each query return top_k2 ann
   std::vector<std::vector<int64_t>> labels(count, std::vector<int64_t>(top_k2));
 
+  // Validate every connection before starting query workers.
+  std::vector<std::unique_ptr<Client>> clients;
+  for (size_t i = 0; i < thread_num; i++) {
+    auto client = cf->createClient();
+    if (!client) {
+      std::exit(1);
+    }
+    clients.push_back(std::move(client));
+  }
+
   std::vector<std::thread> threads;
   std::atomic<size_t> cursor{0};
   auto all_start = std::chrono::high_resolution_clock::now();
   for (size_t i = 0; i < thread_num; i++) {
-    threads.emplace_back([&]() {
-      auto client = cf->createClient();
+    threads.emplace_back([&, client = std::move(clients[i])]() {
       // set query options if necessary
       for (const auto &queryOption : queryOptions) {
         auto ret = client->executeQuery(

@@ -55,7 +55,9 @@ void setup(const DataSet *dataset, const ClientFactory *cf,
   assert(cf != nullptr);
 
   auto client = cf->createClient();
-  assert(client != nullptr);
+  if (!client) {
+    std::exit(1);
+  }
 
   auto table_name = Util::getValueFromMap(setup_opt_map, "table_name");
 
