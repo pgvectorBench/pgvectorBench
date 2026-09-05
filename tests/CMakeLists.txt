@@ -46,3 +46,18 @@ target_link_libraries(
 )
 
 gtest_discover_tests(parquet_zstd_test)
+
+add_executable(load_options_test load_options_test.cc ../src/load.cc)
+
+target_include_directories(load_options_test PRIVATE ${PG_INCLUDE_DIRS}
+                                                    ${CMAKE_SOURCE_DIR}/src)
+target_link_directories(load_options_test PRIVATE ${PG_LIBRARY_DIRS})
+target_link_libraries(load_options_test PRIVATE GTest::gtest_main
+                                               concurrentqueue
+                                               ryu::ryu
+                                               spdlog::spdlog
+                                               ${PG_LIBRARIES}
+                                               pgvectorbench::parquet
+                                               Threads::Threads)
+
+gtest_discover_tests(load_options_test PROPERTIES TIMEOUT 30)

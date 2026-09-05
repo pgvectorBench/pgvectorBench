@@ -1,5 +1,8 @@
 #include <algorithm>
+#include <charconv>
+#include <cstdlib>
 #include <iomanip>
+#include <limits>
 #include <memory>
 #include <sstream>
 #include <type_traits>
@@ -154,23 +157,46 @@ void load(const DataSet *dataset, const ClientFactory *cf,
           const std::unordered_map<std::string, std::string> &load_opt_map) {
   assert(dataset != nullptr);
   assert(cf != nullptr);
+  const size_t cpu_num = std::max(1u, std::thread::hardware_concurrency());
   size_t batch_size = default_load_batch_size;
   size_t thread_num = dataset->format_ == DataSetFormat::PARQUET_FORMAT
                           ? dataset->base_files_.size()
-                          : std::thread::hardware_concurrency() * 2;
-  size_t client_num =
-      std::thread::hardware_concurrency(); // number of pg client
+                          : cpu_num * 2;
+  size_t client_num = cpu_num; // number of pg client
   ssize_t queue_capacity = default_queue_capacity;
+
+  auto parse_positive = [](const char *name, const std::string &value,
+                           size_t maximum) {
+    size_t parsed = 0;
+    const auto [end, error] =
+        std::from_chars(value.data(), value.data() + value.size(), parsed);
+    if (error != std::errc{} || end != value.data() + value.size() ||
+        parsed == 0 || parsed > maximum) {
+      SPDLOG_ERROR("Invalid load option {}={}: expected an integer from 1 to {}",
+                   name, value, maximum);
+      std::exit(1);
+    }
+    return parsed;
+  };
 
   // parse batch size
   auto bs = Util::getValueFromMap(load_opt_map, "batch_size");
   if (bs.has_value()) {
-    batch_size = std::stoul(bs.value());
+    size_t max_batch_size = std::numeric_limits<int64_t>::max();
+    if (dataset->format_ != DataSetFormat::PARQUET_FORMAT) {
+      const size_t value_size = dataset->format_ == DataSetFormat::FVECS_FORMAT
+                                    ? sizeof(float)
+                                    : sizeof(uint8_t);
+      const size_t row_size = sizeof(uint32_t) + dataset->dim_ * value_size;
+      max_batch_size = std::string().max_size() / row_size;
+    }
+    batch_size = parse_positive("batch_size", *bs, max_batch_size);
   }
   // parse thread num used for datasource
   auto tn = Util::getValueFromMap(load_opt_map, "thread_num");
   if (tn.has_value()) {
-    auto parsed_thread_num = std::stoul(tn.value());
+    auto parsed_thread_num =
+        parse_positive("thread_num", *tn, std::numeric_limits<int>::max());
     if (dataset->format_ == DataSetFormat::PARQUET_FORMAT) {
       if (parsed_thread_num > thread_num) {
         SPDLOG_WARN("The specified thread number {} exceeds the optimal number "
@@ -186,18 +212,23 @@ void load(const DataSet *dataset, const ClientFactory *cf,
       thread_num = parsed_thread_num;
     }
   }
-  assert(thread_num > 0);
+  if (thread_num == 0) {
+    SPDLOG_ERROR("Cannot load a dataset without base files");
+    std::exit(1);
+  }
 
   // parse client num
   auto cn = Util::getValueFromMap(load_opt_map, "client_num");
   if (cn.has_value()) {
-    client_num = std::stoul(cn.value());
+    client_num = parse_positive("client_num", *cn,
+                                std::vector<std::thread>().max_size());
   }
 
   // parse queue capacity
   auto qc = Util::getValueFromMap(load_opt_map, "queue_capacity");
   if (qc.has_value()) {
-    queue_capacity = std::stol(qc.value());
+    queue_capacity = parse_positive("queue_capacity", *qc,
+                                    std::numeric_limits<ssize_t>::max());
   }
 
   auto table_name = Util::getValueFromMap(load_opt_map, "table_name");
