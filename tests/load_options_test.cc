@@ -7,12 +7,8 @@
 #include <spdlog/sinks/stdout_sinks.h>
 
 #include "dataset/dataset.h"
+#include "phases.h"
 #include "utils/client_factory.h"
-
-namespace pgvectorbench {
-void load(const DataSet *dataset, const ClientFactory *cf,
-          const std::unordered_map<std::string, std::string> &load_opt_map);
-} // namespace pgvectorbench
 
 namespace {
 

@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <charconv>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <iomanip>
@@ -18,6 +19,7 @@
 #include <ryu/ryu.h>
 
 #include "dataset/dataset.h"
+#include "phases.h"
 #include "dataset/datasource.h"
 #include "dataset/parquet_embedding.h"
 #include "utils/client_factory.h"
@@ -117,7 +119,7 @@ std::string RecordBatchToCopyContent(std::shared_ptr<arrow::RecordBatch> &batch,
 
 } // namespace
 
-void load(const DataSet *dataset, const ClientFactory *cf,
+LoadResult load(const DataSet *dataset, const ClientFactory *cf,
           const std::unordered_map<std::string, std::string> &load_opt_map) {
   assert(dataset != nullptr);
   assert(cf != nullptr);
@@ -267,6 +269,9 @@ void load(const DataSet *dataset, const ClientFactory *cf,
     std::exit(1);
   }
 
+  std::atomic<uint64_t> copied_rows{0};
+  std::atomic<uint64_t> copied_bytes{0};
+  const auto start = std::chrono::steady_clock::now();
   std::vector<std::thread> threads;
   for (size_t i = 0; i < client_num; i++) {
     threads.emplace_back([&, client = std::move(clients[i])]() {
@@ -276,7 +281,16 @@ void load(const DataSet *dataset, const ClientFactory *cf,
           if (!failed.load()) {
             auto ret = client->copy(copy_table_statement.c_str(), ele.c_str(),
                                    ele.size(), [&](PGresult *res) -> bool {
-                                     // no need to handle result
+                                     const char *count = PQcmdTuples(res);
+                                     uint64_t rows = 0;
+                                     const auto end = count + std::strlen(count);
+                                     const auto [parsed, error] =
+                                         std::from_chars(count, end, rows);
+                                     if (error != std::errc{} || parsed != end) {
+                                       return false;
+                                     }
+                                     copied_rows.fetch_add(rows);
+                                     copied_bytes.fetch_add(ele.size());
                                      return true;
                                    });
             if (!ret) {
@@ -317,6 +331,18 @@ void load(const DataSet *dataset, const ClientFactory *cf,
   if (failed.load()) {
     std::exit(1);
   }
+  LoadResult result;
+  result.table_name = table_name.value_or(dataset->name_);
+  result.elapsed_seconds = std::chrono::duration<double>(
+      std::chrono::steady_clock::now() - start).count();
+  result.rows = copied_rows.load();
+  result.copy_bytes = copied_bytes.load();
+  result.rows_per_second = result.rows / std::max(result.elapsed_seconds, 1e-9);
+  result.copy_bytes_per_second = result.copy_bytes / std::max(result.elapsed_seconds, 1e-9);
+  SPDLOG_INFO("loaded {} rows in {} s ({} rows/s, {} COPY bytes/s)",
+              result.rows, result.elapsed_seconds, result.rows_per_second,
+              result.copy_bytes_per_second);
+  return result;
 }
 
 } // namespace pgvectorbench

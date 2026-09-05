@@ -1,4 +1,5 @@
 #include <argparse/argparse.hpp>
+#include <chrono>
 #include <filesystem>
 #include <iostream>
 #include <memory>
@@ -8,6 +9,8 @@
 
 #include "dataset/dataset.h"
 #include "query.h"
+#include "environment.h"
+#include "phases.h"
 #include "utils/client_factory.h"
 #include "utils/parser.h"
 #include "utils/util.h"
@@ -17,21 +20,20 @@
 namespace fs = std::filesystem;
 using pgvectorbench::Util;
 
-namespace pgvectorbench {
-
-extern void
-setup(const DataSet *dataset, const ClientFactory *cf,
-      const std::unordered_map<std::string, std::string> &setup_opt_map);
-extern void
-load(const DataSet *dataset, const ClientFactory *cf,
-     const std::unordered_map<std::string, std::string> &load_opt_map);
-extern void
-create_index(const DataSet *dataset, const ClientFactory *cf,
-             const std::unordered_map<std::string, std::string> &index_opt_map);
-extern void
-teardown(const DataSet *dataset, const ClientFactory *cf,
-         const std::unordered_map<std::string, std::string> &teardown_opt_map);
-} // namespace pgvectorbench
+namespace {
+pgvectorbench::PhaseOptions phaseOptions(const argparse::ArgumentParser &program,
+                                        const std::string &phase) {
+  pgvectorbench::PhaseOptions options;
+  pgvectorbench::CSVParser::parseLine(program.get<std::string>(phase),
+      [&](std::string &token) {
+        auto pos = token.find('=');
+        if (pos != std::string::npos) {
+          options.emplace(token.substr(0, pos), token.substr(pos + 1));
+        }
+      }, ';');
+  return options;
+}
+} // namespace
 
 int main(int argc, char **argv) try {
 
@@ -74,7 +76,7 @@ int main(int argc, char **argv) try {
   program.add_argument("--json")
       .default_value(false)
       .implicit_value(true)
-      .help("write query results as JSON to stdout (requires --query)");
+      .help("write results as JSON to stdout (requires at least one phase)");
 
   // setup benmarking table and may be some gucs
   program.add_argument("--setup").default_value("").help(
@@ -107,8 +109,10 @@ int main(int argc, char **argv) try {
   const bool json_output = program.get<bool>("--json");
   if (json_output) {
     spdlog::set_default_logger(spdlog::stderr_logger_mt("json_diagnostics"));
-    if (!program.is_used("--query")) {
-      SPDLOG_ERROR("--json requires --query");
+    if (!program.is_used("--setup") && !program.is_used("--load") &&
+        !program.is_used("--index") && !program.is_used("--query") &&
+        !program.is_used("--teardown")) {
+      SPDLOG_ERROR("--json requires at least one benchmark phase");
       return 1;
     }
   }
@@ -172,114 +176,72 @@ int main(int argc, char **argv) try {
   }
   SPDLOG_INFO("dataset: \n{}", fmt::streamed(*ds));
 
-  bool index_created = false;
+  pgvectorbench::BenchmarkResult result;
+  result.tool_version = PGVECTORBENCH_VERSION;
+  result.environment = pgvectorbench::inspectEnvironment(*cf);
+  SPDLOG_INFO("database: {}, PostgreSQL: {}, pgvector: {}",
+              result.environment->database, result.environment->postgres_version,
+              result.environment->pgvector_version.value_or("not installed"));
+
   if (program.is_used("--setup")) {
-    auto setup_opt = program.get<std::string>("--setup");
-    std::unordered_map<std::string, std::string> setup_opt_map;
-    pgvectorbench::CSVParser::parseLine(
-        setup_opt,
-        [&](std::string &token) {
-          auto pos = token.find('=');
-          if (pos != std::string::npos) {
-            std::string key = token.substr(0, pos);
-            std::string value = token.substr(pos + 1);
-            setup_opt_map.emplace(std::move(key), std::move(value));
-          }
-        },
-        ';');
-    if (Util::getValueFromMap(setup_opt_map, "index_type").has_value()) {
-      // index created in setup phase
-      index_created = true;
-    }
+    auto options = phaseOptions(program, "--setup");
     SPDLOG_INFO("start setting up the benchmarking table");
-    pgvectorbench::setup(ds, cf.get(), setup_opt_map);
+    result.setup = pgvectorbench::setup(ds, cf.get(), options);
+    result.setup->table = pgvectorbench::preflight(*cf, *ds, result.setup->table_name);
+    if (result.setup->index) result.setup->index->table = result.setup->table;
+    result.environment = pgvectorbench::inspectEnvironment(*cf);
     SPDLOG_INFO("end of setting up");
   }
 
   if (program.is_used("--load")) {
-    auto load_opt = program.get<std::string>("--load");
-    std::unordered_map<std::string, std::string> load_opt_map;
-    pgvectorbench::CSVParser::parseLine(
-        load_opt,
-        [&](std::string &token) {
-          auto pos = token.find('=');
-          if (pos != std::string::npos) {
-            std::string key = token.substr(0, pos);
-            std::string value = token.substr(pos + 1);
-            load_opt_map.emplace(std::move(key), std::move(value));
-          }
-        },
-        ';');
+    auto options = phaseOptions(program, "--load");
+    const auto table = Util::getValueFromMap(options, "table_name").value_or(ds->name_);
+    pgvectorbench::preflight(*cf, *ds, table);
     SPDLOG_INFO("start loading");
-    pgvectorbench::load(ds, cf.get(), load_opt_map);
+    result.load = pgvectorbench::load(ds, cf.get(), options);
+    result.load->table = pgvectorbench::inspectTable(*cf, table);
     SPDLOG_INFO("end of loading");
   }
 
-  // index has not been created in setup phase
-  if (!index_created && program.is_used("--index")) {
-    auto index_opt = program.get<std::string>("--index");
-    std::unordered_map<std::string, std::string> index_opt_map;
-    pgvectorbench::CSVParser::parseLine(
-        index_opt,
-        [&](std::string &token) {
-          auto pos = token.find('=');
-          if (pos != std::string::npos) {
-            std::string key = token.substr(0, pos);
-            std::string value = token.substr(pos + 1);
-            index_opt_map.emplace(std::move(key), std::move(value));
-          }
-        },
-        ';');
-
+  if (program.is_used("--index") && !(result.setup && result.setup->index)) {
+    auto options = phaseOptions(program, "--index");
+    const auto table = Util::getValueFromMap(options, "table_name").value_or(ds->name_);
+    pgvectorbench::preflight(*cf, *ds, table);
     SPDLOG_INFO("start creating index");
-    pgvectorbench::create_index(ds, cf.get(), index_opt_map);
+    result.index = pgvectorbench::create_index(ds, cf.get(), options);
+    result.index->table = pgvectorbench::inspectTable(*cf, table);
     SPDLOG_INFO("end of creating index");
   }
 
-  std::optional<pgvectorbench::QueryResult> query_result;
   if (program.is_used("--query")) {
-    auto query_opt = program.get<std::string>("--query");
-    std::unordered_map<std::string, std::string> query_opt_map;
-    pgvectorbench::CSVParser::parseLine(
-        query_opt,
-        [&](std::string &token) {
-          auto pos = token.find('=');
-          if (pos != std::string::npos) {
-            std::string key = token.substr(0, pos);
-            std::string value = token.substr(pos + 1);
-            query_opt_map.emplace(std::move(key), std::move(value));
-          }
-        },
-        ';');
+    auto options = phaseOptions(program, "--query");
+    const auto table = Util::getValueFromMap(options, "table_name").value_or(ds->name_);
+    auto metadata = pgvectorbench::preflight(*cf, *ds, table, true);
     SPDLOG_INFO("start querying");
-    query_result = pgvectorbench::query(ds, cf.get(), query_opt_map);
-    pgvectorbench::logQueryResult(*query_result);
-    SPDLOG_INFO("end of queryring");
+    result.query = pgvectorbench::query(ds, cf.get(), options);
+    result.query->table = std::move(metadata);
+    pgvectorbench::logQueryResult(*result.query);
+    SPDLOG_INFO("end of querying");
   }
 
   if (program.is_used("--teardown")) {
-    auto teardown_opt = program.get<std::string>("--teardown");
-    std::unordered_map<std::string, std::string> teardown_opt_map;
-    pgvectorbench::CSVParser::parseLine(
-        teardown_opt,
-        [&](std::string &token) {
-          auto pos = token.find('=');
-          if (pos != std::string::npos) {
-            std::string key = token.substr(0, pos);
-            std::string value = token.substr(pos + 1);
-            teardown_opt_map.emplace(std::move(key), std::move(value));
-          }
-        },
-        ';');
-    SPDLOG_INFO("start tearing down the benchmaking table");
-    pgvectorbench::teardown(ds, cf.get(), teardown_opt_map);
+    auto options = phaseOptions(program, "--teardown");
+    pgvectorbench::PhaseResult phase;
+    phase.table_name = Util::getValueFromMap(options, "table_name").value_or(ds->name_);
+    // Teardown accepts an already absent table (DROP IF EXISTS). Earlier phases
+    // retain their own snapshots, even when teardown removes the table/index.
+    const auto start = std::chrono::steady_clock::now();
+    SPDLOG_INFO("start tearing down the benchmarking table");
+    pgvectorbench::teardown(ds, cf.get(), options);
+    phase.elapsed_seconds = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - start).count();
+    result.teardown = std::move(phase);
     SPDLOG_INFO("end of tearing down");
   }
 
   // Delay JSON until all requested phases have succeeded, including teardown.
   if (json_output) {
-    std::cout << pgvectorbench::resultToJson(
-        {PGVECTORBENCH_VERSION, std::move(*query_result)});
+    std::cout << pgvectorbench::resultToJson(result);
     std::cout.flush();
     if (!std::cout) {
       throw std::runtime_error("failed to write JSON results");

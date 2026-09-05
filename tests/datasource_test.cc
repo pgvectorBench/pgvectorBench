@@ -10,12 +10,10 @@
 #include <parquet/arrow/writer.h>
 
 #include "dataset/datasource.h"
+#include "phases.h"
 #include "utils/client_factory.h"
 
 namespace pgvectorbench {
-
-void load(const DataSet *, const ClientFactory *,
-          const std::unordered_map<std::string, std::string> &);
 
 namespace {
 

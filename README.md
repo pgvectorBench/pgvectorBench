@@ -89,8 +89,10 @@ GoogleTest sources. C++ tests use GoogleTest and are discovered automatically by
 CTest; the CLI smoke tests run directly through CTest. Configure with
 `-DBUILD_TESTING=OFF` to omit tests and the GoogleTest dependency.
 
-The database test is skipped unless `PGVECTORBENCH_TEST_DATABASE` is set. To run
-it against a local PostgreSQL instance, use
+Database tests are skipped unless `PGVECTORBENCH_TEST_DATABASE` is set. CLI
+and metadata tests additionally require `CREATE EXTENSION vector` in that
+test database. CI installs a pinned pgvector version and runs both suites. To run
+them against a local PostgreSQL instance, use
 `PGVECTORBENCH_TEST_DATABASE=postgres ctest --preset default`. Standard libpq
 environment variables such as `PGHOST`, `PGPORT`, and `PGUSER` control the
 connection.
@@ -118,7 +120,7 @@ docker build -t pgvectorbench .
 
 ```
 ./pgvectorbench --help
-Usage: pgvectorbench [--help] [--version] [--host VAR] [--port VAR] [--username VAR] [--password VAR] [--dbname VAR] [--dataset VAR] [--path VAR] [--log VAR] [--setup VAR] [--load VAR] [--index VAR] [--query VAR] [--teardown VAR]
+Usage: pgvectorbench [--help] [--version] [--host VAR] [--port VAR] [--username VAR] [--password VAR] [--dbname VAR] [--dataset VAR] [--path VAR] [--log VAR] [--json] [--setup VAR] [--load VAR] [--index VAR] [--query VAR] [--teardown VAR]
 
 Optional arguments:
   -h, --help      shows help message and exits 
@@ -131,6 +133,7 @@ Optional arguments:
   -D, --dataset   dataset name used to run the benchmark [nargs=0..1] [default: "siftsmall"]
   -P, --path      dataset path 
   -l, --log       send log to file 
+  --json         write results as JSON to stdout (requires at least one phase)
   --setup         k/v pairs seperated by semicolon for setup options [nargs=0..1] [default: ""]
   --load          k/v pairs seperated by semicolon for loading dataset [nargs=0..1] [default: ""]
   --index         k/v pairs seperated by semicolon for creating index 
@@ -205,8 +208,8 @@ dimension, and each ground-truth row must provide at least `k1` neighbors.
 
 ### JSON results
 
-Add `--json` to a command containing `--query` to write a single JSON document
-to stdout. Diagnostics and the usual text statistics go to stderr, or to the
+Add `--json` to a command containing any benchmark phase to write a single JSON
+document to stdout. Diagnostics and the usual text statistics go to stderr, or to the
 file specified by `--log`.
 
 ```sh
@@ -217,20 +220,40 @@ file specified by `--log`.
 jq '.query | {qps, elapsed_seconds, latency_us, recall}' result.json
 ```
 
-The table must already be loaded, or the command can include `--setup`,
+Query runs require a populated table, or the command can include `--setup`,
 `--load`, and `--index` as usual. JSON is emitted only after **all requested
 phases succeed**, including teardown. Invalid arguments, dataset errors, and
 failed SQL/SET commands exit nonzero without emitting a JSON result. Check the
 exit code before consuming the output file; failed runs may leave an empty
-file when stdout is redirected. `--json` without `--query` is an error.
+file when stdout is redirected. `--json` without any phase is an error.
+
+Schema version **2** preserves the existing fields inside `query` and adds
+environment and phase results. Unexecuted phases are `null`, including `query`
+for load-only or index-only runs. Consumers of schema version 1 should accept
+version 2 and check for `null` before reading a phase. For example:
+
+```sh
+./pgvectorbench -d postgres --path /opt/datasets/vecs/siftsmall \
+  --load="table_name=siftsmall;client_num=4" --json > load.json
+./pgvectorbench -d postgres --index="index_type=hnsw;m=16;ef_construction=64" \
+  --json > index.json
+jq '{environment, load, index}' index.json
+```
 
 The versioned result has these fields:
 
 | Field | Meaning |
 |-------|---------|
-| `schema_version` | JSON schema version, currently `1` |
+| `schema_version` | JSON schema version, currently `2` |
 | `tool_version` | Version of pgvectorbench that produced the result |
 | `status` | `"success"`; unsuccessful runs do not produce a result |
+| `environment` | Database name, PostgreSQL/pgvector versions, and settings on a separate inspection connection |
+| `setup` | Setup elapsed time, table snapshot, and nested `index` result when the index was built during setup |
+| `load` | Elapsed time, COPY-confirmed `rows`, serialized `copy_bytes`, `rows_per_second`, `copy_bytes_per_second`, and table snapshot |
+| `index` | CREATE INDEX elapsed time, index name/type, effective build-session settings, and table snapshot |
+| `teardown` | Elapsed time and target table; its `table` is `null` because the relation may have been removed |
+| `query.table` | Table and index metadata captured immediately before the query phase |
+| `query.effective_settings` | Actual settings read from the first query worker connection after measurement |
 | `query.dataset` | Dataset name, format, metric, dimensions, base/query vector counts, and ground-truth neighbor count |
 | `query.config` | Resolved table/column, `k1`, `k2`, `thread_num`, `loop`, and explicit `session_overrides` |
 | `query.elapsed_seconds` | Query worker wall time used to calculate QPS |
@@ -248,14 +271,60 @@ Latency `count` is `query_vectors × loop`; recall `count` is `query_vectors`,
 because recall uses only each query's final iteration. Dataset counts come from
 the dataset definition, not a database inspection. `session_overrides` contains
 only explicitly applied `hnsw.ef_search` and `ivfflat.probes` values; omitted
-server defaults are not inferred. Connection credentials and query vectors are
-not included in the result.
+server defaults are reported separately in `effective_settings`. Connection
+credentials and query vectors are not included in the result.
+
+Each table snapshot includes resolved schema/name, column names/types/vector dimensions,
+`estimated_rows`, `table_size_bytes` (including TOAST and auxiliary forks),
+`indexes_size_bytes`, and `total_size_bytes`. Index entries include name/schema,
+access method, size, indexed columns/expressions, operator classes, explicit
+storage `options`, validity/readiness, and partial-index predicates. Omitted
+index storage options mean server defaults; those defaults are not inferred.
+Every index is listed: the report does not claim which one the planner used.
+
+`estimated_rows` comes from `pg_class.reltuples` and is `null` when unknown. It
+can be stale; inspection never runs `COUNT(*)` or `ANALYZE`. Sizes refer to the
+named relation, excluding child partitions. Setup/load/index snapshots are
+captured after that phase; query snapshots are captured before measurement.
+Snapshots survive teardown and phases may target different tables.
+
+Load timing covers producer/consumer startup, file reading, conversion, COPY,
+and worker completion, excluding connection creation and metadata collection.
+Rows are counted from successful COPY command responses, so rows skipped by a
+BEFORE INSERT trigger are not counted. COPY bytes measure serialized payloads
+submitted in successful COPY commands, including any rows skipped by triggers;
+they exclude wire-protocol overhead and are not the compressed source file size.
+Index timing covers the CREATE INDEX round trip, excluding connection creation,
+SET commands and metadata inspection. Setup timing includes an index built
+inside setup; its nested index time must not be added again to setup time.
 
 JSON uses the same computed `QueryResult` as the text statistics, with full
-floating-point precision. The timing methodology is unchanged: query worker
+floating-point precision. Query worker
 wall time includes thread startup, session SET commands, and completion, but
-excludes dataset preparation, connection creation, and recall aggregation.
+excludes dataset preparation, connection creation/closure, and recall aggregation.
 Individual latency includes the database round trip and result handling.
+Environment inspection and effective-settings collection are outside query timing.
+
+### Environment inspection and preflight
+
+Before loading, indexing, or reading query files, the CLI resolves the target
+through PostgreSQL's `search_path` (schema-qualified and quoted table names work)
+and checks that the dataset's vector column is `vector(n)` with the expected
+dimension. Query runs also require an integer `id` column. Missing tables report
+the connected database name, so connecting to the wrong database fails early.
+Unbounded `vector` columns and views are not supported by this preflight.
+
+A missing, invalid, partial, or differently configured ANN index produces a
+warning when no valid non-partial index matches the vector column and distance
+operator class. The query can still run as an exact scan. This catalog check does
+not verify the chosen execution plan or guarantee index use.
+
+Inspection records PostgreSQL/pgvector versions and settings such as
+`shared_buffers`, `work_mem`, `maintenance_work_mem`, parallelism, and available
+HNSW/IVFFlat GUCs. `environment.server_settings` describes a fresh connection;
+`query.effective_settings` and `index.effective_settings` describe the actual
+phase sessions after their overrides. Setup refreshes the environment after
+creating extensions. A missing pgvector extension is represented by `null`.
 
 ### docker
 

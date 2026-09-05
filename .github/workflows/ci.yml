@@ -59,7 +59,7 @@ jobs:
         run: |
           set -euxo pipefail
           sudo apt-get update
-          sudo apt-get install -y ca-certificates cmake g++ git libpq-dev lsb-release ninja-build postgresql wget
+          sudo apt-get install -y ca-certificates cmake g++ git libpq-dev lsb-release ninja-build postgresql postgresql-server-dev-all wget
 
       - name: Install system Arrow and Parquet
         if: matrix.use_system_arrow
@@ -78,6 +78,9 @@ jobs:
         run: |
           sudo systemctl start postgresql
           sudo -u postgres createuser --superuser runner
+
+      - name: Install pgvector for integration tests
+        run: bash tests/install_pgvector.sh
 
       - name: Configure
         run: >-
@@ -150,6 +153,9 @@ jobs:
           done
           brew services info postgresql@17
           exit 1
+
+      - name: Install pgvector for integration tests
+        run: bash tests/install_pgvector.sh
 
       - name: Configure
         run: >-

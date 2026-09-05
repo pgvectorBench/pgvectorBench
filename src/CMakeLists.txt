@@ -7,6 +7,7 @@ add_executable(
   load.cc
   query.cc
   result.cc
+  environment.cc
   teardown.cc
 )
 
