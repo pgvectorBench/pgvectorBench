@@ -37,7 +37,7 @@ find_package(PG REQUIRED)
 find_package(Parquet REQUIRED)
 find_package(Threads REQUIRED)
 
-add_subdirectory(third_party)
+include(ThirdParty)
 add_subdirectory(src)
 
 if(BUILD_TESTING)

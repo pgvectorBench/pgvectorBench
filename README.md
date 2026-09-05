@@ -58,7 +58,7 @@ Datasets details:
 **MacOS**
 
 ```
-brew install apache-arrow
+brew install apache-arrow git
 brew install libpq
 ```
 
@@ -68,14 +68,20 @@ brew install libpq
 wget https://apache.jfrog.io/artifactory/arrow/$(lsb_release --id --short | tr 'A-Z' 'a-z')/apache-arrow-apt-source-latest-$(lsb_release --codename --short).deb
 sudo apt install -y -V ./apache-arrow-apt-source-latest-$(lsb_release --codename --short).deb
 sudo apt update
-sudo apt install -y libparquet-dev libpq-dev
+sudo apt install -y git libparquet-dev libpq-dev
 ```
 
 ```
-git submodule update --init --recursive
-mkdir build && cd build
-cmake .. && make -j
+cmake -S . -B build
+cmake --build build --parallel
 ```
+
+CMake downloads pinned argparse, concurrentqueue, and spdlog release archives
+and clones Ryu at a fixed commit from its master branch into the build directory.
+Release archives are verified with SHA256 checksums. Git submodules are not
+required. Dependency versions, source URLs, commit IDs, and checksums are
+maintained in `cmake/ThirdParty.cmake`; edit a URL there when a different source
+is required.
 
 ## Build docker image
 
