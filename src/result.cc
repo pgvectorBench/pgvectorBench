@@ -1,6 +1,7 @@
 #include "result.h"
 
 #include <cmath>
+#include <cstdint>
 #include <sstream>
 #include <stdexcept>
 #include <utility>
@@ -11,12 +12,14 @@
 namespace pgvectorbench {
 namespace {
 
+template <typename Sample>
 std::string distributionToString(const DistributionResult &result) {
   std::ostringstream out;
-  out << "best=" << result.best << " worst=" << result.worst
+  out << "best=" << static_cast<Sample>(result.best)
+      << " worst=" << static_cast<Sample>(result.worst)
       << " average=" << result.average;
   for (const auto &p : result.percentiles) {
-    out << " P(" << p.label << "%)=" << p.value;
+    out << " P(" << p.label << "%)=" << static_cast<Sample>(p.value);
   }
   return out.str();
 }
@@ -46,8 +49,8 @@ nlohmann::json distributionToJson(const DistributionResult &result) {
 
 void logQueryResult(const QueryResult &result) {
   SPDLOG_INFO("qps: {}", result.qps);
-  SPDLOG_INFO("latency(us): {}", distributionToString(result.latency_us));
-  SPDLOG_INFO("recall: {}", distributionToString(result.recall));
+  SPDLOG_INFO("latency(us): {}", distributionToString<uint32_t>(result.latency_us));
+  SPDLOG_INFO("recall: {}", distributionToString<double>(result.recall));
 }
 
 std::string resultToJson(const BenchmarkResult &result) {

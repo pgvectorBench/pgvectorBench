@@ -1,15 +1,52 @@
 #include <cstdint>
 #include <limits>
 #include <locale>
+#include <memory>
+#include <sstream>
 #include <stdexcept>
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
+#include <spdlog/sinks/ostream_sink.h>
+#include <spdlog/spdlog.h>
 
 #include "result.h"
 
 namespace pgvectorbench {
 namespace {
+
+TEST(ResultTest, TextLogsPreserveIntegerLatenciesAndFractionalMetrics) {
+  std::ostringstream output;
+  auto sink = std::make_shared<spdlog::sinks::ostream_sink_mt>(output);
+  auto logger = std::make_shared<spdlog::logger>("result_test", sink);
+  logger->set_pattern("%v");
+  struct RestoreLogger {
+    std::shared_ptr<spdlog::logger> previous;
+    ~RestoreLogger() { spdlog::set_default_logger(previous); }
+  } restore{spdlog::default_logger()};
+  spdlog::set_default_logger(logger);
+
+  QueryResult result;
+  result.latency_us = {2, 1234567, 2345678, 1790122.5,
+                       {{"99.0", 99, 2345678}}};
+  result.recall = {2, 1, 0.25, 0.625, {{"99.0", 99, 0.25}}};
+  logQueryResult(result);
+  EXPECT_NE(output.str().find("latency(us): best=1234567 worst=2345678 "
+                             "average=1.79012e+06 P(99.0%)=2345678\n"),
+            std::string::npos)
+      << output.str();
+  EXPECT_NE(output.str().find("recall: best=1 worst=0.25 average=0.625 "
+                             "P(99.0%)=0.25\n"),
+            std::string::npos)
+      << output.str();
+
+  result.latency_us = {2, 1, 2, 1.5, {{"50", 50, 1}}};
+  logQueryResult(result);
+  EXPECT_NE(output.str().find("latency(us): best=1 worst=2 average=1.5 "
+                             "P(50%)=1\n"),
+            std::string::npos)
+      << output.str();
+}
 
 TEST(ResultTest, EscapesStringsAndPreservesUnicode) {
   BenchmarkResult result;
