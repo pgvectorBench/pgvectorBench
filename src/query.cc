@@ -469,6 +469,10 @@ void query(const DataSet *dataset, const ClientFactory *cf,
         auto start = std::chrono::high_resolution_clock::now();
         auto ret = client->executeQuery(
             queries[q_idx].c_str(), [&](PGresult *res) -> bool {
+              // Only the final iteration owns this query's recall results.
+              if (idx < vcount - count) {
+                return true;
+              }
               int num_rows = PQntuples(res);
               for (int j = 0; j < num_rows; j++) {
                 const char *int_value_str = PQgetvalue(res, j, 0);
