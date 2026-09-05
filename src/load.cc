@@ -197,7 +197,7 @@ void load(const DataSet *dataset, const ClientFactory *cf,
   // parse queue capacity
   auto qc = Util::getValueFromMap(load_opt_map, "queue_capacity");
   if (qc.has_value()) {
-    queue_capacity = std::stol(cn.value());
+    queue_capacity = std::stol(qc.value());
   }
 
   auto table_name = Util::getValueFromMap(load_opt_map, "table_name");
