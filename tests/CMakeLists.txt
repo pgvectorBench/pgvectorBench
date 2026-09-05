@@ -1,3 +1,5 @@
+include(GoogleTest)
+
 add_executable(client_factory_test client_factory_test.cc)
 
 target_include_directories(
@@ -10,12 +12,12 @@ target_link_directories(client_factory_test PRIVATE ${PG_LIBRARY_DIRS})
 
 target_link_libraries(
   client_factory_test
+  PRIVATE GTest::gtest_main
   PRIVATE spdlog::spdlog
   PRIVATE ${PG_LIBRARIES}
 )
 
-add_test(NAME client_factory_test COMMAND client_factory_test)
-set_tests_properties(client_factory_test PROPERTIES SKIP_RETURN_CODE 77)
+gtest_discover_tests(client_factory_test)
 
 add_test(NAME cli_version COMMAND pgvectorbench --version)
 add_test(NAME cli_help COMMAND pgvectorbench --help)
@@ -29,16 +31,18 @@ target_include_directories(
 
 target_link_libraries(
   parquet_ground_truth_test
+  PRIVATE GTest::gtest_main
   PRIVATE pgvectorbench::arrow
 )
 
-add_test(NAME parquet_ground_truth_test COMMAND parquet_ground_truth_test)
+gtest_discover_tests(parquet_ground_truth_test)
 
 add_executable(parquet_zstd_test parquet_zstd_test.cc)
 
 target_link_libraries(
   parquet_zstd_test
+  PRIVATE GTest::gtest_main
   PRIVATE pgvectorbench::parquet
 )
 
-add_test(NAME parquet_zstd_test COMMAND parquet_zstd_test)
+gtest_discover_tests(parquet_zstd_test)

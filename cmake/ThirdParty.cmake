@@ -19,6 +19,9 @@ set(PGVECTORBENCH_CONCURRENTQUEUE_SHA256
 set(PGVECTORBENCH_SPDLOG_VERSION "1.17.0")
 set(PGVECTORBENCH_SPDLOG_SHA256
     "d8862955c6d74e5846b3f580b1605d2428b11d97a410d86e2fb13e857cd3a744")
+set(PGVECTORBENCH_GOOGLETEST_VERSION "1.18.0")
+set(PGVECTORBENCH_GOOGLETEST_SHA256
+    "6e3191c1455468b3fc35a417fb565c1c5071aee1b7e7f85e30cf48a98d37d8b5")
 
 # URL archives should use extraction-time timestamps so a newly downloaded
 # dependency is rebuilt when necessary. CMP0135 is available from CMake 3.24.
@@ -131,6 +134,17 @@ FetchContent_Declare(
   URL_HASH "SHA256=${PGVECTORBENCH_SPDLOG_SHA256}")
 
 FetchContent_MakeAvailable(argparse concurrentqueue ryu spdlog)
+
+if(BUILD_TESTING)
+  set(BUILD_GMOCK OFF CACHE BOOL "" FORCE)
+  set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
+  FetchContent_Declare(
+    googletest
+    URL
+      "https://github.com/google/googletest/archive/refs/tags/v${PGVECTORBENCH_GOOGLETEST_VERSION}.tar.gz"
+    URL_HASH "SHA256=${PGVECTORBENCH_GOOGLETEST_SHA256}")
+  FetchContent_MakeAvailable(googletest)
+endif()
 
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
   target_compile_definitions(
