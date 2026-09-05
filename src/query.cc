@@ -474,7 +474,7 @@ void query(const DataSet *dataset, const ClientFactory *cf,
         SPDLOG_DEBUG("query {}: {}, execution time: {}", q_idx, queries[q_idx],
                      microseconds);
         if (!ret) {
-          SPDLOG_ERROR("failed to excute query {}", queries[idx]);
+          SPDLOG_ERROR("failed to excute query {}", queries[q_idx]);
         }
       }
     });
