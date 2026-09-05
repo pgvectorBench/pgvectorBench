@@ -248,36 +248,35 @@ void load(const DataSet *dataset, const ClientFactory *cf,
   LightweightSemaphore sem(queue_capacity); // use this to limit sql_queue size
 
   std::atomic<bool> finished{false};
+  std::atomic<bool> failed{false};
+  auto enqueue = [&](std::string str) -> bool {
+    if (failed.load()) {
+      return false;
+    }
+    sem.wait();
+    try {
+      if (sql_queue.enqueue(std::move(str))) {
+        return true;
+      }
+    } catch (...) {
+      sem.signal();
+      throw;
+    }
+    sem.signal();
+    return false;
+  };
   std::unique_ptr<DataSource> datasource;
   switch (dataset->format_) {
   case DataSetFormat::FVECS_FORMAT:
     datasource.reset(new VecsDataSource<float>(
         dataset, batch_size, thread_num, [&](VecsBlock *block) -> bool {
-          sem.wait();
-          auto str = VecsToCopyContent<float>(block);
-          if (sql_queue.enqueue(str)) {
-            SPDLOG_DEBUG("enqueue start_id: {} content: {}", block->start_id_,
-                         str);
-            return true;
-          }
-          sem.signal();
-          SPDLOG_ERROR("enqueue failed");
-          return false;
+          return enqueue(VecsToCopyContent<float>(block));
         }));
     break;
   case DataSetFormat::BVECS_FORMAT:
     datasource.reset(new VecsDataSource<uint8_t>(
         dataset, batch_size, thread_num, [&](VecsBlock *block) -> bool {
-          sem.wait();
-          auto str = VecsToCopyContent<uint8_t>(block);
-          if (sql_queue.enqueue(str)) {
-            SPDLOG_DEBUG("enqueue start_id: {} content: {}", block->start_id_,
-                         str);
-            return true;
-          }
-          sem.signal();
-          SPDLOG_ERROR("enqueue failed");
-          return true;
+          return enqueue(VecsToCopyContent<uint8_t>(block));
         }));
     break;
   case DataSetFormat::PARQUET_FORMAT:
@@ -286,15 +285,7 @@ void load(const DataSet *dataset, const ClientFactory *cf,
           dataset, batch_size, thread_num,
           [&](std::shared_ptr<arrow::RecordBatch> &batch,
               const DataSet *ds) -> bool {
-            sem.wait();
-            auto str = RecordBatchToCopyContent<float>(batch, ds);
-            if (sql_queue.enqueue(str)) {
-              SPDLOG_DEBUG("enqueue content: {}", str);
-              return true;
-            }
-            sem.signal();
-            SPDLOG_ERROR("enqueue failed");
-            return true;
+            return enqueue(RecordBatchToCopyContent<float>(batch, ds));
           }));
     } else {
       assert(dataset->base_type_ == DataSetBaseType::DOUBLE);
@@ -302,15 +293,7 @@ void load(const DataSet *dataset, const ClientFactory *cf,
           dataset, batch_size, thread_num,
           [&](std::shared_ptr<arrow::RecordBatch> &batch,
               const DataSet *ds) -> bool {
-            sem.wait();
-            auto str = RecordBatchToCopyContent<double>(batch, ds);
-            if (sql_queue.enqueue(str)) {
-              SPDLOG_DEBUG("enqueue content: {}", str);
-              return true;
-            }
-            sem.signal();
-            SPDLOG_ERROR("enqueue failed");
-            return true;
+            return enqueue(RecordBatchToCopyContent<double>(batch, ds));
           }));
     }
 
@@ -320,21 +303,22 @@ void load(const DataSet *dataset, const ClientFactory *cf,
     std::exit(1);
   }
 
-  datasource->start();
-
   std::vector<std::thread> threads;
   for (size_t i = 0; i < client_num; i++) {
     threads.emplace_back([&, client = std::move(clients[i])]() {
       std::string ele;
       while (!finished.load() || sem.availableApprox() != queue_capacity) {
         if (sql_queue.try_dequeue(ele)) {
-          auto ret = client->copy(copy_table_statement.c_str(), ele.c_str(),
-                                  ele.size(), [&](PGresult *res) -> bool {
-                                    // no need to handle result
-                                    return true;
-                                  });
-          if (!ret) {
-            SPDLOG_ERROR("failed to handle copy command: {}", ele);
+          if (!failed.load()) {
+            auto ret = client->copy(copy_table_statement.c_str(), ele.c_str(),
+                                   ele.size(), [&](PGresult *res) -> bool {
+                                     // no need to handle result
+                                     return true;
+                                   });
+            if (!ret) {
+              failed.store(true);
+              SPDLOG_ERROR("failed to handle copy command");
+            }
           }
           sem.signal();
         }
@@ -342,7 +326,20 @@ void load(const DataSet *dataset, const ClientFactory *cf,
     });
   }
 
-  datasource->wait_for_finish();
+  try {
+    datasource->start();
+  } catch (const std::exception &error) {
+    failed.store(true);
+    SPDLOG_ERROR("Failed to start loading dataset: {}", error.what());
+  }
+  // Even if start() failed after scheduling some tasks, keep consumers alive
+  // until every producer finishes and releases its buffers.
+  try {
+    datasource->wait_for_finish();
+  } catch (const std::exception &error) {
+    failed.store(true);
+    SPDLOG_ERROR("Failed to read or convert dataset: {}", error.what());
+  }
 
   SPDLOG_DEBUG("datasouce has finished all reading");
   finished.store(true);
@@ -353,6 +350,9 @@ void load(const DataSet *dataset, const ClientFactory *cf,
 
   SPDLOG_DEBUG("LightweightSemaphore availableApprox: {}",
                sem.availableApprox());
+  if (failed.load()) {
+    std::exit(1);
+  }
 }
 
 } // namespace pgvectorbench

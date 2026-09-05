@@ -61,3 +61,9 @@ target_link_libraries(load_options_test PRIVATE GTest::gtest_main
                                                Threads::Threads)
 
 gtest_discover_tests(load_options_test PROPERTIES TIMEOUT 30)
+
+add_executable(datasource_test datasource_test.cc)
+target_include_directories(datasource_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(datasource_test PRIVATE GTest::gtest_main spdlog::spdlog
+                                            pgvectorbench::parquet Threads::Threads)
+gtest_discover_tests(datasource_test PROPERTIES TIMEOUT 30)
