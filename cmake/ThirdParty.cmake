@@ -2,6 +2,14 @@ include(FetchContent)
 
 # Keep dependency sources independent of Git submodules. Released dependencies
 # are pinned to upstream tags, while Ryu is pinned to a master commit.
+option(PGVECTORBENCH_USE_SYSTEM_ARROW
+       "Use system-installed Arrow and Parquet libraries" OFF)
+
+set(PGVECTORBENCH_ARROW_VERSION "25.0.1")
+set(PGVECTORBENCH_ARROW_COMMIT
+    "beccec0d0c451b7aa3e4530416ac431b3c035c69")
+set(PGVECTORBENCH_ARROW_SHA256
+    "43d5de0a581f43cf63a2c06b4dcf13b9ff6fcd800f023324596e5781093bc500")
 set(PGVECTORBENCH_ARGPARSE_VERSION "3.2")
 set(PGVECTORBENCH_ARGPARSE_SHA256
     "9dcb3d8ce0a41b2a48ac8baa54b51a9f1b6a2c52dd374e28cc713bab0568ec98")
@@ -16,6 +24,71 @@ set(PGVECTORBENCH_SPDLOG_SHA256
 # dependency is rebuilt when necessary. CMP0135 is available from CMake 3.24.
 if(POLICY CMP0135)
   cmake_policy(SET CMP0135 NEW)
+endif()
+
+add_library(pgvectorbench_arrow INTERFACE)
+add_library(pgvectorbench::arrow ALIAS pgvectorbench_arrow)
+add_library(pgvectorbench_parquet INTERFACE)
+add_library(pgvectorbench::parquet ALIAS pgvectorbench_parquet)
+
+if(PGVECTORBENCH_USE_SYSTEM_ARROW)
+  find_package(Arrow CONFIG REQUIRED)
+  find_package(Parquet CONFIG REQUIRED)
+
+  target_link_libraries(pgvectorbench_arrow INTERFACE Arrow::arrow_shared)
+  target_link_libraries(
+    pgvectorbench_parquet
+    INTERFACE Parquet::parquet_shared pgvectorbench_arrow)
+else()
+  # Arrow disables its option declarations when used as a subproject unless
+  # explicitly requested. Build only the static Arrow and Parquet libraries,
+  # with all of their dependencies isolated in the build directory.
+  set(_pgvectorbench_build_testing "${BUILD_TESTING}")
+  set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build shared libraries" FORCE)
+
+  set(ARROW_DEFINE_OPTIONS ON CACHE BOOL "" FORCE)
+  set(ARROW_DEPENDENCY_SOURCE BUNDLED CACHE STRING "" FORCE)
+  set(ARROW_DEPENDENCY_USE_SHARED OFF CACHE BOOL "" FORCE)
+  set(ARROW_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+  set(ARROW_BUILD_STATIC ON CACHE BOOL "" FORCE)
+  set(ARROW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+  set(ARROW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+  set(ARROW_BUILD_INTEGRATION OFF CACHE BOOL "" FORCE)
+  set(ARROW_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+  set(ARROW_BUILD_UTILITIES OFF CACHE BOOL "" FORCE)
+  set(ARROW_GIT_ID "${PGVECTORBENCH_ARROW_COMMIT}" CACHE STRING "" FORCE)
+  set(ARROW_GIT_DESCRIPTION "apache-arrow-${PGVECTORBENCH_ARROW_VERSION}"
+      CACHE STRING "" FORCE)
+  set(ARROW_PARQUET ON CACHE BOOL "" FORCE)
+  set(ARROW_MIMALLOC OFF CACHE BOOL "" FORCE)
+  set(ARROW_JEMALLOC OFF CACHE BOOL "" FORCE)
+  set(ARROW_WITH_ZSTD ON CACHE BOOL "" FORCE)
+
+  FetchContent_Declare(
+    arrow
+    URL
+      "https://archive.apache.org/dist/arrow/arrow-${PGVECTORBENCH_ARROW_VERSION}/apache-arrow-${PGVECTORBENCH_ARROW_VERSION}.tar.gz"
+    URL_HASH "SHA256=${PGVECTORBENCH_ARROW_SHA256}"
+    SOURCE_SUBDIR cpp)
+  FetchContent_MakeAvailable(arrow)
+  set_property(DIRECTORY "${arrow_SOURCE_DIR}/cpp" PROPERTY EXCLUDE_FROM_ALL TRUE)
+
+  # Some of Arrow's bundled dependencies overwrite these parent cache
+  # variables. Restore them before configuring the rest of pgvectorBench.
+  set(BUILD_TESTING "${_pgvectorbench_build_testing}" CACHE BOOL
+      "Build the testing tree" FORCE)
+  set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build shared libraries" FORCE)
+  unset(_pgvectorbench_build_testing)
+
+  target_include_directories(
+    pgvectorbench_arrow
+    SYSTEM INTERFACE
+      "$<BUILD_INTERFACE:${arrow_SOURCE_DIR}/cpp/src>"
+      "$<BUILD_INTERFACE:${arrow_BINARY_DIR}/src>")
+  target_link_libraries(pgvectorbench_arrow INTERFACE arrow_static)
+  target_link_libraries(
+    pgvectorbench_parquet
+    INTERFACE parquet_static pgvectorbench_arrow)
 endif()
 
 # Do not build dependency-owned examples, tests, or benchmarks as part of

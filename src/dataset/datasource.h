@@ -1,5 +1,7 @@
 #pragma once
 
+#include <utility>
+
 #include <spdlog/spdlog.h>
 
 #include <arrow/record_batch.h>
@@ -185,12 +187,13 @@ public:
           return;
         }
 
-        std::shared_ptr<::arrow::RecordBatchReader> rb_reader;
-        status = arrow_reader->GetRecordBatchReader(&rb_reader);
-        if (!status.ok()) {
-          SPDLOG_ERROR("get record batch reader failed: {}", status.ToString());
+        auto rb_reader_result = arrow_reader->GetRecordBatchReader();
+        if (!rb_reader_result.ok()) {
+          SPDLOG_ERROR("get record batch reader failed: {}",
+                       rb_reader_result.status().ToString());
           return;
         }
+        auto rb_reader = std::move(rb_reader_result).ValueOrDie();
 
         size_t total_row = 0;
         std::shared_ptr<arrow::RecordBatch> recordBatch;

@@ -5,6 +5,7 @@
 #include <thread>
 #include <tuple>
 #include <type_traits>
+#include <utility>
 
 // third party
 #include <arrow/api.h>
@@ -147,12 +148,13 @@ prepareParquetQueries(const DataSet *dataset,
     std::exit(1);
   }
 
-  std::shared_ptr<::arrow::RecordBatchReader> rb_reader;
-  status = arrow_reader->GetRecordBatchReader(&rb_reader);
-  if (!status.ok()) {
-    SPDLOG_ERROR("get record batch reader failed: {}", status.ToString());
+  auto rb_reader_result = arrow_reader->GetRecordBatchReader();
+  if (!rb_reader_result.ok()) {
+    SPDLOG_ERROR("get record batch reader failed: {}",
+                 rb_reader_result.status().ToString());
     std::exit(1);
   }
+  auto rb_reader = std::move(rb_reader_result).ValueOrDie();
 
   std::vector<std::string> queries;
   queries.reserve(dataset->query_file_.second);
@@ -261,12 +263,13 @@ prepareParquetGroundTruths(const DataSet *dataset, size_t top_k1) {
     std::exit(1);
   }
 
-  std::shared_ptr<::arrow::RecordBatchReader> rb_reader;
-  status = arrow_reader->GetRecordBatchReader(&rb_reader);
-  if (!status.ok()) {
-    SPDLOG_ERROR("get record batch reader failed: {}", status.ToString());
+  auto rb_reader_result = arrow_reader->GetRecordBatchReader();
+  if (!rb_reader_result.ok()) {
+    SPDLOG_ERROR("get record batch reader failed: {}",
+                 rb_reader_result.status().ToString());
     std::exit(1);
   }
+  auto rb_reader = std::move(rb_reader_result).ValueOrDie();
 
   std::vector<std::vector<int64_t>> gts(dataset->gt_file_.second,
                                         std::vector<int64_t>(top_k1));
@@ -281,13 +284,23 @@ prepareParquetGroundTruths(const DataSet *dataset, size_t top_k1) {
     if (recordBatch) {
       auto id_array =
           std::static_pointer_cast<arrow::Int64Array>(recordBatch->column(0));
-      auto list_array =
-          std::static_pointer_cast<arrow::ListArray>(recordBatch->column(1));
-      auto int_array =
-          std::static_pointer_cast<arrow::Int64Array>(list_array->values());
-      for (size_t i = 0; i < recordBatch->num_rows(); i++) {
-        copyParquetGroundTruthRow(*id_array, *list_array, *int_array, i,
-                                  top_k1, gts);
+      auto neighbors = recordBatch->column(1);
+      auto copy_rows = [&](const auto &list_array) {
+        auto int_array =
+            std::static_pointer_cast<arrow::Int64Array>(list_array.values());
+        for (int64_t i = 0; i < recordBatch->num_rows(); i++) {
+          copyParquetGroundTruthRow(*id_array, list_array, *int_array, i,
+                                    top_k1, gts);
+        }
+      };
+
+      if (neighbors->type_id() == arrow::Type::LIST) {
+        copy_rows(*std::static_pointer_cast<arrow::ListArray>(neighbors));
+      } else if (neighbors->type_id() == arrow::Type::LARGE_LIST) {
+        copy_rows(*std::static_pointer_cast<arrow::LargeListArray>(neighbors));
+      } else {
+        throw std::runtime_error(
+            "ground-truth neighbors must be a list or large_list");
       }
     }
   } while (recordBatch);

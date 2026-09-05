@@ -9,7 +9,8 @@
 
 namespace {
 
-bool appendNeighbors(arrow::ListBuilder &lists,
+template <typename ListBuilderType>
+bool appendNeighbors(ListBuilderType &lists,
                      const std::vector<int64_t> &values) {
   if (!lists.Append().ok()) {
     return false;
@@ -62,12 +63,39 @@ int main() {
     return 1;
   }
 
+  bool rejected_short_row = false;
   try {
     pgvectorbench::copyParquetGroundTruthRow(*ids, *lists, *values, 3, 2,
                                              ground_truths);
   } catch (const std::runtime_error &) {
-    return 0;
+    rejected_short_row = true;
+  }
+  if (!rejected_short_row) {
+    return 1;
   }
 
-  return 1;
+  auto large_value_builder = std::make_shared<arrow::Int64Builder>();
+  arrow::LargeListBuilder large_list_builder(arrow::default_memory_pool(),
+                                              large_value_builder);
+  if (!appendNeighbors(large_list_builder, {42, 40, 41})) {
+    return 1;
+  }
+
+  std::shared_ptr<arrow::Array> large_list_array_base;
+  if (!large_list_builder.Finish(&large_list_array_base).ok()) {
+    return 1;
+  }
+  auto large_lists =
+      std::static_pointer_cast<arrow::LargeListArray>(large_list_array_base);
+  auto large_values =
+      std::static_pointer_cast<arrow::Int64Array>(large_lists->values());
+  std::vector<std::vector<int64_t>> large_ground_truths(
+      4, std::vector<int64_t>(2));
+  pgvectorbench::copyParquetGroundTruthRow(*ids, *large_lists, *large_values,
+                                           0, 2, large_ground_truths);
+  if (large_ground_truths[0] != std::vector<int64_t>({40, 42})) {
+    return 1;
+  }
+
+  return 0;
 }
