@@ -96,7 +96,8 @@ environment variables such as `PGHOST`, `PGPORT`, and `PGUSER` control the
 connection.
 
 To use system-installed Arrow and Parquet instead, configure with
-`-DPGVECTORBENCH_USE_SYSTEM_ARROW=ON`. For example, on Debian:
+`-DPGVECTORBENCH_USE_SYSTEM_ARROW=ON`. If Arrow also imports nlohmann/json, that
+dependency is reused instead of downloading the pinned copy. For example, on Debian:
 
 ```
 wget https://packages.apache.org/artifactory/arrow/$(lsb_release --id --short | tr 'A-Z' 'a-z')/apache-arrow-apt-source-latest-$(lsb_release --codename --short).deb

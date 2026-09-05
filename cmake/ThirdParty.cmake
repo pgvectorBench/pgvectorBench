@@ -138,13 +138,18 @@ FetchContent_Declare(
     "https://github.com/gabime/spdlog/archive/refs/tags/v${PGVECTORBENCH_SPDLOG_VERSION}.tar.gz"
   URL_HASH "SHA256=${PGVECTORBENCH_SPDLOG_SHA256}")
 
-FetchContent_Declare(
-  nlohmann_json
-  URL
-    "https://github.com/nlohmann/json/releases/download/v${PGVECTORBENCH_NLOHMANN_JSON_VERSION}/json.tar.xz"
-  URL_HASH "SHA256=${PGVECTORBENCH_NLOHMANN_JSON_SHA256}")
+FetchContent_MakeAvailable(argparse concurrentqueue ryu spdlog)
 
-FetchContent_MakeAvailable(argparse concurrentqueue ryu spdlog nlohmann_json)
+# System Arrow can import nlohmann/json as a transitive dependency. Reuse that
+# target instead of defining it again; otherwise use the pinned vendored source.
+if(NOT TARGET nlohmann_json::nlohmann_json)
+  FetchContent_Declare(
+    nlohmann_json
+    URL
+      "https://github.com/nlohmann/json/releases/download/v${PGVECTORBENCH_NLOHMANN_JSON_VERSION}/json.tar.xz"
+    URL_HASH "SHA256=${PGVECTORBENCH_NLOHMANN_JSON_SHA256}")
+  FetchContent_MakeAvailable(nlohmann_json)
+endif()
 
 if(BUILD_TESTING)
   set(BUILD_GMOCK OFF CACHE BOOL "" FORCE)
