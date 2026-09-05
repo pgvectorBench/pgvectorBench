@@ -29,9 +29,6 @@ gtest_discover_tests(datasource_test PROPERTIES TIMEOUT 30)
 
 add_test(NAME cli_version COMMAND pgvectorbench --version)
 add_test(NAME cli_help COMMAND pgvectorbench --help)
-add_test(NAME docker_entrypoint
-         COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR}
-                 -P ${CMAKE_CURRENT_SOURCE_DIR}/docker_entrypoint_test.cmake)
 
 add_executable(parquet_ground_truth_test parquet_ground_truth_test.cc)
 

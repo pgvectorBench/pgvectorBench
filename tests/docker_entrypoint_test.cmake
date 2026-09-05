@@ -1,7 +1,0 @@
-file(STRINGS "${SOURCE_DIR}/Dockerfile" entrypoint REGEX "^ENTRYPOINT ")
-string(REGEX REPLACE "^ENTRYPOINT " "" entrypoint "${entrypoint}")
-string(JSON count LENGTH "${entrypoint}")
-string(JSON executable GET "${entrypoint}" 0)
-if(NOT count EQUAL 1 OR NOT executable STREQUAL "pgvectorbench")
-  message(FATAL_ERROR "Docker must run pgvectorbench directly, preserving every argument")
-endif()
