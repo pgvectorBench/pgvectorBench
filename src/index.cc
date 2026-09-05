@@ -125,7 +125,9 @@ void create_index(
   assert(cf != nullptr);
 
   auto client = cf->createClient();
-  assert(client != nullptr);
+  if (!client) {
+    std::exit(1);
+  }
 
   // set index build options
   std::vector<std::string> indexOptions = generateIndexOptions(index_opt_map);
@@ -191,7 +193,9 @@ void drop_index(const DataSet *dataset, const ClientFactory *cf,
   assert(cf != nullptr);
 
   auto client = cf->createClient();
-  assert(client != nullptr);
+  if (!client) {
+    std::exit(1);
+  }
 
   auto statement = generateDropIndexStatement(dataset, index_name);
   auto ret =
