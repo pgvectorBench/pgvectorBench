@@ -3,6 +3,8 @@
 #include <functional>
 #include <libpq-fe.h>
 #include <memory>
+#include <stdexcept>
+#include <vector>
 #include <spdlog/spdlog.h>
 
 namespace pgvectorbench {
@@ -12,6 +14,24 @@ public:
   Client(PGconn *conn) : connection_(conn) {}
 
   ~Client() { PQfinish(connection_); }
+
+  using Result = std::unique_ptr<PGresult, decltype(&PQclear)>;
+
+  Result queryParams(const std::string &query,
+                     const std::vector<std::string> &parameters = {}) {
+    std::vector<const char *> values;
+    for (const auto &value : parameters) {
+      values.push_back(value.c_str());
+    }
+    Result result(PQexecParams(connection_, query.c_str(), values.size(), nullptr,
+                               values.data(), nullptr, nullptr, 0), &PQclear);
+    if (!result || (PQresultStatus(result.get()) != PGRES_TUPLES_OK &&
+                    PQresultStatus(result.get()) != PGRES_COMMAND_OK)) {
+      throw std::runtime_error(result ? PQresultErrorMessage(result.get())
+                                      : PQerrorMessage(connection_));
+    }
+    return result;
+  }
 
   // return false if execute failed
   bool executeQuery(const char *query,

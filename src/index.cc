@@ -1,7 +1,10 @@
+#include <chrono>
 #include <optional>
 #include <sstream>
 
 #include "dataset/dataset.h"
+#include "environment.h"
+#include "phases.h"
 #include "utils/client_factory.h"
 #include "utils/util.h"
 
@@ -118,7 +121,7 @@ std::vector<std::string> generateIndexOptions(
 
 } // namespace
 
-void create_index(
+IndexResult create_index(
     const DataSet *dataset, const ClientFactory *cf,
     const std::unordered_map<std::string, std::string> &index_opt_map) {
   assert(dataset != nullptr);
@@ -175,6 +178,7 @@ void create_index(
     std::exit(1);
   }
 
+  const auto start = std::chrono::steady_clock::now();
   auto ret =
       client->executeQuery(statement.c_str(), [&](PGresult *res) -> bool {
         // no need to handle result
@@ -186,6 +190,15 @@ void create_index(
     SPDLOG_ERROR("failed when creating index");
     std::exit(1);
   }
+  IndexResult result;
+  result.elapsed_seconds = std::chrono::duration<double>(
+      std::chrono::steady_clock::now() - start).count();
+  result.table_name = table_name.value_or(dataset->name_);
+  result.index_name = index_name.value_or(dataset->name_ + "_" + dataset->vector_field_ + "_idx");
+  result.index_type = index_type_lower_case;
+  result.effective_settings = readServerSettings(*client);
+  SPDLOG_INFO("index built in {} s", result.elapsed_seconds);
+  return result;
 }
 
 void drop_index(const DataSet *dataset, const ClientFactory *cf,

@@ -21,6 +21,7 @@ jobs:
     timeout-minutes: 60
     env:
       PGVECTORBENCH_TEST_DATABASE: postgres
+      PGPORT: 55432
       SCCACHE_CACHE_SIZE: 2G
       SCCACHE_DIR: ${{ github.workspace }}/.sccache
 
@@ -59,7 +60,8 @@ jobs:
         run: |
           set -euxo pipefail
           sudo apt-get update
-          sudo apt-get install -y ca-certificates cmake g++ git libpq-dev lsb-release ninja-build postgresql wget
+          sudo apt-get install -y ca-certificates cmake g++ git libpq-dev lsb-release ninja-build postgresql-16 postgresql-server-dev-16 wget
+          echo "/usr/lib/postgresql/16/bin" >> "$GITHUB_PATH"
 
       - name: Install system Arrow and Parquet
         if: matrix.use_system_arrow
@@ -76,8 +78,12 @@ jobs:
 
       - name: Start test database
         run: |
-          sudo systemctl start postgresql
-          sudo -u postgres createuser --superuser runner
+          sudo pg_conftool 16 main set port "$PGPORT"
+          sudo systemctl restart postgresql@16-main
+          sudo -u postgres createuser --port="$PGPORT" --superuser runner
+
+      - name: Install pgvector for integration tests
+        run: bash tests/install_pgvector.sh
 
       - name: Configure
         run: >-
@@ -150,6 +156,9 @@ jobs:
           done
           brew services info postgresql@17
           exit 1
+
+      - name: Install pgvector for integration tests
+        run: bash tests/install_pgvector.sh
 
       - name: Configure
         run: >-

@@ -71,6 +71,7 @@ target_link_libraries(load_options_test PRIVATE GTest::gtest_main
 gtest_discover_tests(load_options_test PROPERTIES TIMEOUT 30)
 
 add_executable(query_test query_test.cc ../src/query.cc ../src/result.cc
+                          ../src/environment.cc
                           ../src/index.cc ../src/load.cc ../src/dataset/dataset.cc)
 target_include_directories(query_test PRIVATE ${PG_INCLUDE_DIRS} ${CMAKE_SOURCE_DIR}/src)
 target_link_directories(query_test PRIVATE ${PG_LIBRARY_DIRS})

@@ -1,17 +1,15 @@
+#include <chrono>
 #include <memory>
 #include <sstream>
 #include <unordered_map>
 
 #include "dataset/dataset.h"
+#include "phases.h"
 #include "utils/client_factory.h"
 #include "utils/parser.h"
 #include "utils/util.h"
 
 namespace pgvectorbench {
-
-extern void
-create_index(const DataSet *dataset, const ClientFactory *cf,
-             const std::unordered_map<std::string, std::string> &index_opt_map);
 
 namespace {
 
@@ -49,7 +47,7 @@ generateCreateTableStatement(const DataSet *dataset,
 
 } // namespace
 
-void setup(const DataSet *dataset, const ClientFactory *cf,
+SetupResult setup(const DataSet *dataset, const ClientFactory *cf,
            const std::unordered_map<std::string, std::string> &setup_opt_map) {
   assert(dataset != nullptr);
   assert(cf != nullptr);
@@ -59,7 +57,10 @@ void setup(const DataSet *dataset, const ClientFactory *cf,
     std::exit(1);
   }
 
+  SetupResult result;
+  const auto start = std::chrono::steady_clock::now();
   auto table_name = Util::getValueFromMap(setup_opt_map, "table_name");
+  result.table_name = table_name.value_or(dataset->name_);
 
   // create extensions
   std::vector<std::string> extensions;
@@ -108,9 +109,12 @@ void setup(const DataSet *dataset, const ClientFactory *cf,
   auto index_name = Util::getValueFromMap(setup_opt_map, "index_type");
   if (index_name.has_value()) {
     SPDLOG_INFO("start creating index in setup phase");
-    create_index(dataset, cf, setup_opt_map);
+    result.index = create_index(dataset, cf, setup_opt_map);
     SPDLOG_INFO("end of creating index in setup phase");
   }
+  result.elapsed_seconds = std::chrono::duration<double>(
+      std::chrono::steady_clock::now() - start).count();
+  return result;
 }
 
 } // namespace pgvectorbench

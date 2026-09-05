@@ -21,6 +21,7 @@
 #include "dataset/parquet_embedding.h"
 #include "dataset/parquet_ground_truth.h"
 #include "query.h"
+#include "environment.h"
 #include "utils/client_factory.h"
 #include "utils/file_reader.h"
 #include "utils/parser.h"
@@ -493,7 +494,7 @@ QueryResult query(
   std::atomic<bool> failed{false};
   auto all_start = std::chrono::steady_clock::now();
   for (size_t i = 0; i < thread_num; i++) {
-    threads.emplace_back([&, client = std::move(clients[i])]() {
+    threads.emplace_back([&, client = clients[i].get()]() {
       // set query options if necessary
       for (const auto &queryOption : queryOptions) {
         auto ret = client->executeQuery(
@@ -609,6 +610,7 @@ QueryResult query(
   result.qps = qps;
   result.latency_us = summarize(p_latencies, vcount, percentages);
   result.recall = summarize(p_recalls, count, percentages);
+  result.effective_settings = readServerSettings(*clients.front());
   return result;
 }
 

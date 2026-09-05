@@ -50,15 +50,16 @@ TEST(ResultTest, TextLogsPreserveIntegerLatenciesAndFractionalMetrics) {
 
 TEST(ResultTest, EscapesStringsAndPreservesUnicode) {
   BenchmarkResult result;
+  result.query.emplace();
   result.tool_version = "test";
-  result.query.dataset.name = "数据\"\\\n\t\r\b\f";
-  result.query.config.table_name = std::string("a\0b", 3);
-  result.query.config.session_overrides["a\"b"] = "c\\d";
+  result.query->dataset.name = "数据\"\\\n\t\r\b\f";
+  result.query->config.table_name = std::string("a\0b", 3);
+  result.query->config.session_overrides["a\"b"] = "c\\d";
   const auto json = nlohmann::json::parse(resultToJson(result));
-  EXPECT_EQ(json.at("query").at("dataset").at("name"), result.query.dataset.name);
+  EXPECT_EQ(json.at("query").at("dataset").at("name"), result.query->dataset.name);
   const auto &config = json.at("query").at("config");
-  EXPECT_EQ(config.at("table_name"), result.query.config.table_name);
-  EXPECT_EQ(config.at("session_overrides"), result.query.config.session_overrides);
+  EXPECT_EQ(config.at("table_name"), result.query->config.table_name);
+  EXPECT_EQ(config.at("session_overrides"), result.query->config.session_overrides);
   EXPECT_EQ(json.at("status"), "success");
 }
 
@@ -69,8 +70,9 @@ protected:
 
 TEST(ResultTest, NumbersAreLocaleIndependentAndKeepPrecision) {
   BenchmarkResult result;
-  result.query.qps = 1.2345678901234567;
-  result.query.latency_us.count = 9007199254740993ULL;
+  result.query.emplace();
+  result.query->qps = 1.2345678901234567;
+  result.query->latency_us.count = 9007199254740993ULL;
   const auto previous = std::locale();
   struct RestoreLocale {
     std::locale value;
@@ -78,9 +80,9 @@ TEST(ResultTest, NumbersAreLocaleIndependentAndKeepPrecision) {
   } restore{previous};
   std::locale::global(std::locale(previous, new CommaDecimal));
   const auto json = nlohmann::json::parse(resultToJson(result));
-  EXPECT_DOUBLE_EQ(json.at("query").at("qps").get<double>(), result.query.qps);
+  EXPECT_DOUBLE_EQ(json.at("query").at("qps").get<double>(), result.query->qps);
   EXPECT_EQ(json.at("query").at("latency_us").at("count").get<uint64_t>(),
-            result.query.latency_us.count);
+            result.query->latency_us.count);
 }
 
 TEST(ResultTest, RejectsNonFiniteMetrics) {
@@ -88,19 +90,41 @@ TEST(ResultTest, RejectsNonFiniteMetrics) {
                      -std::numeric_limits<double>::infinity(),
                      std::numeric_limits<double>::quiet_NaN()}) {
     BenchmarkResult result;
-    result.query.qps = value;
+    result.query.emplace();
+    result.query->qps = value;
     EXPECT_THROW(resultToJson(result), std::runtime_error);
-    result.query.qps = 1;
-    result.query.recall.percentiles = {{"90", 90, value}};
+    result.query->qps = 1;
+    result.query->recall.percentiles = {{"90", 90, value}};
     EXPECT_THROW(resultToJson(result), std::runtime_error);
-    result.query.recall.percentiles = {{"90", value, 1}};
+    result.query->recall.percentiles = {{"90", value, 1}};
     EXPECT_THROW(resultToJson(result), std::runtime_error);
   }
 }
 
+TEST(ResultTest, RejectsNonFinitePhaseMetricsWithoutQueryResults) {
+  BenchmarkResult result;
+  result.load.emplace();
+  result.load->elapsed_seconds = std::numeric_limits<double>::quiet_NaN();
+  EXPECT_THROW(resultToJson(result), std::runtime_error);
+  result.load->elapsed_seconds = 1;
+  result.load->rows_per_second = std::numeric_limits<double>::infinity();
+  EXPECT_THROW(resultToJson(result), std::runtime_error);
+  result.load->rows_per_second = 0;
+  result.index.emplace();
+  result.index->table.emplace();
+  result.index->table->estimated_rows = std::numeric_limits<double>::infinity();
+  EXPECT_THROW(resultToJson(result), std::runtime_error);
+  result.index->table->estimated_rows.reset();
+  const auto json = nlohmann::json::parse(resultToJson(result));
+  EXPECT_TRUE(json.at("query").is_null());
+  EXPECT_TRUE(json.at("index").at("table").at("estimated_rows").is_null());
+  EXPECT_EQ(json.at("load").at("rows"), 0);
+}
+
 TEST(ResultTest, KeepsRepeatedPercentilesAsNumericArrayEntries) {
   BenchmarkResult result;
-  result.query.recall.percentiles = {{"90", 90, 0.5}, {"90.0", 90, 0.5}};
+  result.query.emplace();
+  result.query->recall.percentiles = {{"90", 90, 0.5}, {"90.0", 90, 0.5}};
   const auto json = nlohmann::json::parse(resultToJson(result));
   const auto expected = nlohmann::json::array(
       {{{"percentage", 90}, {"value", 0.5}},

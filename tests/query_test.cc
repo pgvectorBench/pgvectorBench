@@ -14,14 +14,12 @@
 #include <spdlog/sinks/basic_file_sink.h>
 
 #include "dataset/dataset.h"
+#include "phases.h"
 #include "query.h"
+#include "environment.h"
 #include "utils/client_factory.h"
 
 namespace pgvectorbench {
-void create_index(const DataSet *, const ClientFactory *,
-                  const std::unordered_map<std::string, std::string> &);
-void load(const DataSet *, const ClientFactory *,
-          const std::unordered_map<std::string, std::string> &);
 
 namespace {
 using Options = std::unordered_map<std::string, std::string>;
@@ -350,7 +348,7 @@ protected:
   void validateCliJson(const std::string &output) {
     nlohmann::json json;
     ASSERT_NO_THROW(json = nlohmann::json::parse(output));
-    EXPECT_EQ(json.at("schema_version"), 1);
+    EXPECT_EQ(json.at("schema_version"), 2);
     EXPECT_EQ(json.at("status"), "success");
     EXPECT_FALSE(json.at("tool_version").get<std::string>().empty());
     const auto &q = json.at("query");
@@ -412,7 +410,37 @@ TEST_F(QueryDatabaseTest, ReturnsResolvedParametersAndSeparateSampleCounts) {
   EXPECT_TRUE(defaults.latency_us.percentiles.empty());
 }
 
-TEST_F(QueryDatabaseTest, JsonCliEmitsOneDocumentAndSupportsLogFiles) {
+class QueryCliTest : public QueryDatabaseTest {
+protected:
+  void SetUp() override {
+    QueryDatabaseTest::SetUp();
+    if (HasFatalFailure() || IsSkipped()) return;
+    const auto extension = admin_->queryParams(
+        "SELECT extversion FROM pg_extension WHERE extname='vector'");
+    if (PQntuples(extension.get()) == 0) {
+      GTEST_SKIP() << "Install pgvector in PGVECTORBENCH_TEST_DATABASE for CLI tests";
+    }
+  }
+
+  void writeCliDataset() {
+    QueryDatabaseTest::writeCliDataset();
+    exec("ALTER TABLE " + schema_ + ".items ALTER COLUMN embedding TYPE vector(128) "
+         "USING array_fill(id::real, ARRAY[128])::vector");
+  }
+
+  std::string runPhases(std::vector<std::string> phases, int exit_code = 0) {
+    phases.insert(phases.begin(), {"--dbname", std::getenv("PGVECTORBENCH_TEST_DATABASE"),
+                                  "--path", directory_});
+    return runCli(std::move(phases), exit_code);
+  }
+
+  std::string diagnostics() {
+    std::ifstream input(directory_ + "/stderr.log");
+    return std::string((std::istreambuf_iterator<char>(input)), {});
+  }
+};
+
+TEST_F(QueryCliTest, JsonCliEmitsOneDocumentAndSupportsLogFiles) {
   writeCliDataset();
   const std::string options =
       "table_name=items;thread_num=2;loop=3;k1=1;k2=2;"
@@ -429,7 +457,7 @@ TEST_F(QueryDatabaseTest, JsonCliEmitsOneDocumentAndSupportsLogFiles) {
   EXPECT_EQ(std::filesystem::file_size(directory_ + "/stderr.log"), 0);
 }
 
-TEST_F(QueryDatabaseTest, JsonCliSuppressesOutputOnQueryOrTeardownFailure) {
+TEST_F(QueryCliTest, JsonCliSuppressesOutputOnQueryOrTeardownFailure) {
   writeCliDataset();
   EXPECT_TRUE(runJsonCli("thread_num=1;loop=0", 1).empty());
   EXPECT_TRUE(runJsonCli("thread_num=1;table_name=missing_table", 1).empty());
@@ -440,6 +468,140 @@ TEST_F(QueryDatabaseTest, JsonCliSuppressesOutputOnQueryOrTeardownFailure) {
                   .empty());
   std::filesystem::remove(directory_ + "/siftsmall_query.fvecs");
   EXPECT_TRUE(runJsonCli("thread_num=1;table_name=items", 1).empty());
+}
+
+TEST_F(QueryCliTest, PreflightRejectsMissingTablesAndWrongDimensionsBeforeFiles) {
+  writeCliDataset();
+  std::filesystem::remove(directory_ + "/siftsmall_query.fvecs");
+  EXPECT_TRUE(runJsonCli("table_name=absent;thread_num=1", 1).empty());
+  EXPECT_NE(diagnostics().find("table absent not found"), std::string::npos);
+  EXPECT_NE(diagnostics().find(std::getenv("PGVECTORBENCH_TEST_DATABASE")), std::string::npos);
+  exec("ALTER TABLE " + schema_ + ".items ALTER COLUMN embedding TYPE vector(2) "
+       "USING '[0,0]'::vector");
+  EXPECT_TRUE(runJsonCli("table_name=items;thread_num=1", 1).empty());
+  EXPECT_NE(diagnostics().find("expected vector(128)"), std::string::npos);
+  exec("ALTER TABLE " + schema_ + ".items RENAME COLUMN embedding TO other");
+  EXPECT_TRUE(runPhases({"--load=table_name=items"}, 1).empty());
+  EXPECT_NE(diagnostics().find("vector column embedding not found"), std::string::npos);
+  exec("ALTER TABLE " + schema_ + ".items RENAME COLUMN other TO embedding");
+  exec("ALTER TABLE " + schema_ + ".items ALTER COLUMN embedding TYPE vector(128) "
+       "USING array_fill(0::real, ARRAY[128])::vector");
+  exec("ALTER TABLE " + schema_ + ".items ALTER COLUMN id TYPE text USING id::text");
+  EXPECT_TRUE(runJsonCli("table_name=items;thread_num=1", 1).empty());
+  EXPECT_NE(diagnostics().find("requires an integer id column"), std::string::npos);
+}
+
+TEST_F(QueryCliTest, ReportsAllIndexesAndEffectiveSessionSettings) {
+  writeCliDataset();
+  const auto before = inspectEnvironment(*factory_);
+  ASSERT_TRUE(before.pgvector_version.has_value());
+  EXPECT_EQ(before.database, std::getenv("PGVECTORBENCH_TEST_DATABASE"));
+  EXPECT_FALSE(before.postgres_version.empty());
+  EXPECT_TRUE(before.server_settings.contains("hnsw.ef_search"));
+  exec("CREATE INDEX wrong_metric ON " + schema_ +
+       ".items USING hnsw (embedding vector_cosine_ops) WITH (m=4,ef_construction=8)");
+  auto output = nlohmann::json::parse(runJsonCli(
+      "table_name=items;thread_num=1;k1=1;k2=2;hnsw.ef_search=73"));
+  EXPECT_EQ(output["query"]["effective_settings"]["hnsw.ef_search"], "73");
+  EXPECT_EQ(output["environment"]["server_settings"]["hnsw.ef_search"],
+            before.server_settings.at("hnsw.ef_search"));
+  EXPECT_FALSE(output["query"]["table"]["warnings"].empty());
+  exec("CREATE INDEX matching_metric ON " + schema_ +
+       ".items USING ivfflat (embedding vector_l2_ops) WITH (lists=1)");
+  exec("ANALYZE " + schema_ + ".items");
+  output = nlohmann::json::parse(runJsonCli("table_name=items;thread_num=1;k1=1;k2=2"));
+  const auto &table = output["query"]["table"];
+  EXPECT_TRUE(table["columns"][0]["dimensions"].is_null());
+  EXPECT_EQ(table["columns"][1]["dimensions"], 128);
+  EXPECT_TRUE(table["warnings"].empty());
+  EXPECT_EQ(table["estimated_rows"], 2);
+  ASSERT_EQ(table["indexes"].size(), 2);
+  EXPECT_EQ(table["indexes"][0]["type"], "ivfflat");
+  EXPECT_EQ(table["indexes"][0]["options"]["lists"], "1");
+  EXPECT_EQ(table["indexes"][1]["operator_classes"][0], "vector_cosine_ops");
+  EXPECT_EQ(table["indexes"][1]["options"]["m"], "4");
+  EXPECT_GT(table["indexes_size_bytes"].get<uint64_t>(), 0);
+  EXPECT_EQ(table["total_size_bytes"].get<uint64_t>(),
+            table["table_size_bytes"].get<uint64_t>() + table["indexes_size_bytes"].get<uint64_t>());
+}
+
+TEST_F(QueryCliTest, ReportsLoadIndexAndTeardownWithoutAQuery) {
+  exec("DROP TABLE " + schema_ + ".items");
+  std::vector<std::vector<float>> base(10000, std::vector<float>(128, 1));
+  writeVecs("siftsmall_base.fvecs", 128, base);
+  auto output = nlohmann::json::parse(runPhases({
+      "--setup=table_name=items", "--load=table_name=items;thread_num=2;client_num=2;batch_size=317",
+      "--index=table_name=items;index_name=items_hnsw;index_type=hnsw;m=4;ef_construction=8;maintenance_work_mem=32MB",
+      "--teardown=table_name=items"}));
+  EXPECT_TRUE(output["query"].is_null());
+  EXPECT_FALSE(output["setup"].is_null());
+  EXPECT_FALSE(output["teardown"].is_null());
+  const auto &load = output["load"];
+  EXPECT_EQ(load["rows"], 10000);
+  EXPECT_GT(load["copy_bytes"].get<uint64_t>(), 0);
+  EXPECT_GT(load["elapsed_seconds"].get<double>(), 0);
+  EXPECT_DOUBLE_EQ(load["rows_per_second"].get<double>(),
+                   10000 / load["elapsed_seconds"].get<double>());
+  EXPECT_DOUBLE_EQ(load["copy_bytes_per_second"].get<double>(),
+                   load["copy_bytes"].get<double>() / load["elapsed_seconds"].get<double>());
+  EXPECT_TRUE(load["table"]["indexes"].empty());
+  const auto &index = output["index"];
+  EXPECT_GT(index["elapsed_seconds"].get<double>(), 0);
+  EXPECT_EQ(index["index_name"], "items_hnsw");
+  EXPECT_EQ(index["effective_settings"]["maintenance_work_mem"], "32MB");
+  ASSERT_EQ(index["table"]["indexes"].size(), 1);
+  EXPECT_GT(index["table"]["indexes"][0]["size_bytes"].get<uint64_t>(), 0);
+  EXPECT_THROW(inspectTable(*factory_, "items"), std::runtime_error);
+}
+
+TEST_F(QueryCliTest, RecordsSetupIndexAndStandaloneIndexPhase) {
+  exec("DROP TABLE " + schema_ + ".items");
+  auto output = nlohmann::json::parse(runPhases({
+      "--setup=table_name=items;index_name=setup_idx;index_type=hnsw;m=4;ef_construction=8"}));
+  EXPECT_TRUE(output["index"].is_null());
+  EXPECT_EQ(output["setup"]["index"]["index_name"], "setup_idx");
+  EXPECT_GT(output["setup"]["index"]["elapsed_seconds"].get<double>(), 0);
+  EXPECT_EQ(output["setup"]["table"]["indexes"].size(), 1);
+  output = nlohmann::json::parse(runPhases({
+      "--index=table_name=items;index_name=second_idx;index_type=ivfflat;lists=1"}));
+  EXPECT_TRUE(output["setup"].is_null());
+  EXPECT_TRUE(output["load"].is_null());
+  EXPECT_TRUE(output["query"].is_null());
+  EXPECT_EQ(output["index"]["index_type"], "ivfflat");
+  EXPECT_EQ(output["index"]["table"]["indexes"].size(), 2);
+  EXPECT_TRUE(runPhases({
+      "--index=table_name=items;index_name=second_idx;index_type=ivfflat;lists=1"}, 1).empty());
+  EXPECT_TRUE(runPhases({"--load=table_name=items"}, 1).empty());
+}
+
+TEST_F(QueryCliTest, ResolvesSchemaQualifiedAndQuotedTableNames) {
+  const auto table = schema_ + ".\"Mixed'Case\"";
+  exec("CREATE TABLE " + table + " (id bigint, embedding vector(128))");
+  const auto metadata = preflight(*factory_, *getDataSet("siftsmall"), table, true);
+  EXPECT_EQ(metadata.name, "Mixed'Case");
+  EXPECT_EQ(metadata.schema, inspectTable(*factory_, "items").schema);
+  EXPECT_THROW(inspectTable(*factory_, "items; DROP TABLE items"), std::runtime_error);
+  EXPECT_EQ(inspectTable(*factory_, "items").name, "items");
+}
+
+TEST_F(QueryDatabaseTest, LoadCountsRowsAcknowledgedByCopy) {
+  exec("TRUNCATE " + schema_ + ".items");
+  exec("CREATE FUNCTION " + schema_ + ".skip_odd() RETURNS trigger "
+       "LANGUAGE plpgsql AS $$ BEGIN IF NEW.id % 2 = 1 THEN RETURN NULL; "
+       "END IF; RETURN NEW; END $$");
+  exec("CREATE TRIGGER skip_odd BEFORE INSERT ON " + schema_ + ".items "
+       "FOR EACH ROW EXECUTE FUNCTION " + schema_ + ".skip_odd()");
+  writeVecs<float>("base.fvecs", 2, {{0, 0}, {1, 1}, {2, 2}});
+  const DataSet ds(directory_, "items", DataSetFormat::FVECS_FORMAT,
+                   DataSetBaseType::FLOAT, DataSetMetric::L2,
+                   {{"base.fvecs", 3}}, {}, {}, "emb", 2, 3, {}, {}, 0);
+  const auto result = load(&ds, factory_.get(),
+                           {{"batch_size", "2"}, {"thread_num", "1"},
+                            {"client_num", "2"}});
+  EXPECT_EQ(result.rows, 2);
+  EXPECT_GT(result.copy_bytes, 0);
+  const auto actual = admin_->queryParams("SELECT count(*) FROM " + schema_ + ".items");
+  EXPECT_EQ(result.rows, std::stoull(PQgetvalue(actual.get(), 0, 0)));
 }
 
 TEST_F(QueryDatabaseTest, AlignsReorderedQueriesAndGroundTruthsById) {
