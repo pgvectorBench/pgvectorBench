@@ -1,6 +1,8 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <unordered_map>
+#include <unistd.h>
 
 #include <arrow/api.h>
 #include <arrow/io/api.h>
@@ -8,8 +10,13 @@
 #include <parquet/arrow/writer.h>
 
 #include "dataset/datasource.h"
+#include "utils/client_factory.h"
 
 namespace pgvectorbench {
+
+void load(const DataSet *, const ClientFactory *,
+          const std::unordered_map<std::string, std::string> &);
+
 namespace {
 
 class DataSourceTest : public testing::Test {
@@ -33,10 +40,11 @@ protected:
                    1, rows, {"query", 0}, {"gt", 0}, 0);
   }
 
-  void writeVecs() {
+  void writeVecs(size_t rows = 2) {
     std::ofstream file(directory_ + "/base", std::ios::binary);
     const uint32_t dimension = 1;
-    for (float value : {1.0f, 2.0f}) {
+    for (size_t i = 0; i < rows; i++) {
+      const float value = static_cast<float>(i + 1);
       file.write(reinterpret_cast<const char *>(&dimension), sizeof(dimension));
       file.write(reinterpret_cast<const char *>(&value), sizeof(value));
     }
@@ -168,6 +176,60 @@ TEST_F(DataSourceTest, ParquetRejectsIncompleteRowCount) {
   ParquetDataSource source(&ds, 1, 1, [](auto &, const DataSet *) { return true; });
   source.start();
   EXPECT_THROW(source.wait_for_finish(), std::runtime_error);
+}
+
+TEST_F(DataSourceTest, LoadExitsAfterRejectedCopyWithBlockedProducers) {
+  const char *database = std::getenv("PGVECTORBENCH_TEST_DATABASE");
+  if (!database) {
+    GTEST_SKIP() << "Set PGVECTORBENCH_TEST_DATABASE to run database tests";
+  }
+  auto factory = ClientFactory::createBuilder().setDBName(database).build();
+  auto client = factory->createClient();
+  ASSERT_NE(client, nullptr);
+  const std::string table = "load_error_" + directory_.substr(directory_.size() - 6);
+  ASSERT_TRUE(client->executeQuery(
+      ("CREATE TABLE " + table + " (id integer CHECK (id < 0), embedding text)").c_str(),
+      [](PGresult *) { return true; }));
+  writeVecs(256);
+  auto ds = dataset(DataSetFormat::FVECS_FORMAT, 256);
+  const std::unordered_map<std::string, std::string> options{
+      {"table_name", table}, {"batch_size", "1"}, {"thread_num", "3"},
+      {"client_num", "2"}, {"queue_capacity", "1"}};
+  EXPECT_EXIT({
+    alarm(15);
+    load(&ds, factory.get(), options);
+    std::_Exit(0);
+  }, testing::ExitedWithCode(1), "");
+  EXPECT_TRUE(client->executeQuery(("DROP TABLE " + table).c_str(),
+                                   [](PGresult *) { return true; }));
+}
+
+TEST_F(DataSourceTest, LoadDrainsTasksWhenStartingLaterFileFails) {
+  const char *database = std::getenv("PGVECTORBENCH_TEST_DATABASE");
+  if (!database) {
+    GTEST_SKIP() << "Set PGVECTORBENCH_TEST_DATABASE to run database tests";
+  }
+  auto factory = ClientFactory::createBuilder().setDBName(database).build();
+  auto client = factory->createClient();
+  ASSERT_NE(client, nullptr);
+  const std::string table = "load_error_" + directory_.substr(directory_.size() - 6);
+  ASSERT_TRUE(client->executeQuery(
+      ("CREATE TABLE " + table + " (id integer, embedding text)").c_str(),
+      [](PGresult *) { return true; }));
+  writeVecs(256);
+  auto ds = dataset(DataSetFormat::FVECS_FORMAT, 256);
+  ds.base_files_.emplace_back("missing", 1);
+  ds.total_cnt_++;
+  const std::unordered_map<std::string, std::string> options{
+      {"table_name", table}, {"batch_size", "1"}, {"thread_num", "3"},
+      {"client_num", "2"}, {"queue_capacity", "1"}};
+  EXPECT_EXIT({
+    alarm(15);
+    load(&ds, factory.get(), options);
+    std::_Exit(0);
+  }, testing::ExitedWithCode(1), "");
+  EXPECT_TRUE(client->executeQuery(("DROP TABLE " + table).c_str(),
+                                   [](PGresult *) { return true; }));
 }
 
 } // namespace

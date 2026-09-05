@@ -62,8 +62,10 @@ target_link_libraries(load_options_test PRIVATE GTest::gtest_main
 
 gtest_discover_tests(load_options_test PROPERTIES TIMEOUT 30)
 
-add_executable(datasource_test datasource_test.cc)
-target_include_directories(datasource_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
+add_executable(datasource_test datasource_test.cc ${CMAKE_SOURCE_DIR}/src/load.cc)
+target_include_directories(datasource_test PRIVATE ${CMAKE_SOURCE_DIR}/src ${PG_INCLUDE_DIRS})
+target_link_directories(datasource_test PRIVATE ${PG_LIBRARY_DIRS})
 target_link_libraries(datasource_test PRIVATE GTest::gtest_main spdlog::spdlog
-                                            pgvectorbench::parquet Threads::Threads)
+                                            pgvectorbench::parquet Threads::Threads
+                                            concurrentqueue ryu::ryu ${PG_LIBRARIES})
 gtest_discover_tests(datasource_test PROPERTIES TIMEOUT 30)
