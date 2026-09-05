@@ -367,6 +367,7 @@ void query(const DataSet *dataset, const ClientFactory *cf,
     top_k1 = std::stol(top_k1_opt.value());
     if (top_k1 > top_k2 || top_k1 <= 0 || top_k1 > dataset->gt_topk_) {
       SPDLOG_ERROR("Illegal k1 value: {}", top_k1);
+      std::exit(1);
     }
   }
 
