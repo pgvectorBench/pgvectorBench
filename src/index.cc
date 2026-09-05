@@ -141,6 +141,7 @@ void create_index(
         });
     if (!ret) {
       SPDLOG_ERROR("failed to execute: {}", indexOption);
+      std::exit(1);
     }
   }
 

@@ -29,6 +29,9 @@ gtest_discover_tests(datasource_test PROPERTIES TIMEOUT 30)
 
 add_test(NAME cli_version COMMAND pgvectorbench --version)
 add_test(NAME cli_help COMMAND pgvectorbench --help)
+add_test(NAME docker_entrypoint
+         COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR}
+                 -P ${CMAKE_CURRENT_SOURCE_DIR}/docker_entrypoint_test.cmake)
 
 add_executable(parquet_ground_truth_test parquet_ground_truth_test.cc)
 
@@ -69,3 +72,18 @@ target_link_libraries(load_options_test PRIVATE GTest::gtest_main
                                                Threads::Threads)
 
 gtest_discover_tests(load_options_test PROPERTIES TIMEOUT 30)
+
+add_executable(query_test query_test.cc ../src/query.cc ../src/index.cc
+                          ../src/load.cc ../src/dataset/dataset.cc)
+target_include_directories(query_test PRIVATE ${PG_INCLUDE_DIRS} ${CMAKE_SOURCE_DIR}/src)
+target_link_directories(query_test PRIVATE ${PG_LIBRARY_DIRS})
+target_link_libraries(query_test PRIVATE GTest::gtest_main ryu::ryu spdlog::spdlog
+                                         concurrentqueue ${PG_LIBRARIES}
+                                         pgvectorbench::parquet Threads::Threads)
+gtest_discover_tests(query_test PROPERTIES TIMEOUT 30)
+
+add_executable(dataset_test dataset_test.cc ../src/dataset/dataset.cc)
+target_include_directories(dataset_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(dataset_test PRIVATE GTest::gtest_main ryu::ryu spdlog::spdlog
+                                           pgvectorbench::arrow)
+gtest_discover_tests(dataset_test)

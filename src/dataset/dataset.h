@@ -61,10 +61,16 @@ struct DataSet {
         fields_(fields), filter_fields_(filter_fields),
         vector_field_(vector_field), dim_(dim), total_cnt_(total_cnt),
         query_file_(query_file), gt_file_(gt_file), gt_topk_(gt_topk) {
+    set_location(location_);
     validate();
   }
 
-  void set_location(std::string location) { location_ = location; }
+  void set_location(std::string location) {
+    if (!location.empty() && location.back() != '/') {
+      location.push_back('/');
+    }
+    location_ = std::move(location);
+  }
 
   void validate() {
     size_t sum = 0;

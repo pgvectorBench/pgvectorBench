@@ -82,11 +82,11 @@ std::unordered_map<std::string, std::shared_ptr<DataSet>> ds_map = {
          ))},
     {"crawl",
      std::shared_ptr<DataSet>(
-         new DataSet(default_vecs_location + "sift/", // location
-                     "crawl",                         // name
-                     DataSetFormat::FVECS_FORMAT,     // format
-                     DataSetBaseType::FLOAT,          // base type
-                     DataSetMetric::L2,               // metric
+         new DataSet(default_vecs_location + "crawl/", // location
+                     "crawl",                          // name
+                     DataSetFormat::FVECS_FORMAT,      // format
+                     DataSetBaseType::FLOAT,           // base type
+                     DataSetMetric::L2,                // metric
                      {std::make_pair("crawl_base.fvecs", 1989995)},
                      {std::make_pair("id", "int"),
                       std::make_pair("embedding", "vector(300)")}, // fields
@@ -581,11 +581,11 @@ std::unordered_map<std::string, std::shared_ptr<DataSet>> ds_map = {
           std::make_pair("train-98-of-100.parquet", 1000000),
           std::make_pair("train-99-of-100.parquet", 1000000)},
          {std::make_pair("id", "int8"),
-          std::make_pair("emb", "vector(1536)")}, // fields
-         {},                                      // filter field
-         "emb",                                   // vector field
-         768,                                     // dimension
-         100000000,                               // nb base vectors
+          std::make_pair("emb", "vector(768)")}, // fields
+         {},                                     // filter field
+         "emb",                                  // vector field
+         768,                                    // dimension
+         100000000,                              // nb base vectors
          std::make_pair("test.parquet", 1000),
          std::make_pair("neighbors.parquet", 1000), 1000 /* gt_topk */
          ))},

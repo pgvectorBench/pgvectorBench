@@ -192,10 +192,20 @@ As shown by previous examples, pgvectorbench, through the combination of its fiv
 
 There are additional parameters that can be configured for each phase, including but not limited to `thread_num`, `batch_size`, and `table_name`. For an exhaustive list, I recommend referring to the source file.
 
+Query options `k1`, `k2`, `thread_num`, and `loop` must be positive integers,
+with `k1 <= k2 <=` the dataset's ground-truth neighbor count. Percentages must
+be finite numbers in `[0, 100]`. Invalid input or failed SQL/SET commands abort
+the benchmark without reporting query statistics.
+
+Parquet query and ground-truth files must each contain every query ID exactly
+once, from `0` to the configured query count minus one. Row order may differ
+between files; rows are matched by ID. Embeddings must have the configured
+dimension, and each ground-truth row must provide at least `k1` neighbors.
+
 ### docker
 
 If you are using docker, you should mount the host's datasets directory to the container's `/opt/datasets` path and also specify the host for the PostgreSQL server.
 
 ```
-docker run -it --mount type=bind,source=/home/zhjwpku/datasets,target=/opt/datasets pgvectorbench -- -h 192.168.31.32 -U zhjwpku -d postgres --query="loop=10;hnsw.ef_search=100;percentages=90,99,99.9"
+docker run -it --mount type=bind,source=/home/zhjwpku/datasets,target=/opt/datasets pgvectorbench -h 192.168.31.32 -U zhjwpku -d postgres --query="loop=10;hnsw.ef_search=100;percentages=90,99,99.9"
 ```

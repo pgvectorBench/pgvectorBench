@@ -23,4 +23,4 @@ COPY --from=builder /opt/pgvectorbench/build-system/pgvectorbench /usr/local/bin
 
 LABEL maintainer="Junwang Zhao <zhjwpku@gmail.com>"
 
-ENTRYPOINT [ "sh", "-c", "pgvectorbench $@" ]
+ENTRYPOINT ["pgvectorbench"]
