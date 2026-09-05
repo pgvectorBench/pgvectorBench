@@ -1,10 +1,13 @@
 #include <argparse/argparse.hpp>
 #include <filesystem>
+#include <iostream>
 #include <memory>
 #include <spdlog/sinks/basic_file_sink.h>
+#include <spdlog/sinks/stdout_sinks.h>
 #include <spdlog/spdlog.h>
 
 #include "dataset/dataset.h"
+#include "query.h"
 #include "utils/client_factory.h"
 #include "utils/parser.h"
 #include "utils/util.h"
@@ -26,14 +29,11 @@ extern void
 create_index(const DataSet *dataset, const ClientFactory *cf,
              const std::unordered_map<std::string, std::string> &index_opt_map);
 extern void
-query(const DataSet *dataset, const ClientFactory *cf,
-      const std::unordered_map<std::string, std::string> &query_opt_map);
-extern void
 teardown(const DataSet *dataset, const ClientFactory *cf,
          const std::unordered_map<std::string, std::string> &teardown_opt_map);
 } // namespace pgvectorbench
 
-int main(int argc, char **argv) {
+int main(int argc, char **argv) try {
 
   // change the current working directory
   auto path = fs::current_path(); // getting path
@@ -71,6 +71,10 @@ int main(int argc, char **argv) {
 
   // log file name & log level
   program.add_argument("-l", "--log").help("send log to file");
+  program.add_argument("--json")
+      .default_value(false)
+      .implicit_value(true)
+      .help("write query results as JSON to stdout (requires --query)");
 
   // setup benmarking table and may be some gucs
   program.add_argument("--setup").default_value("").help(
@@ -96,10 +100,18 @@ int main(int argc, char **argv) {
   try {
     program.parse_args(argc, argv);
   } catch (const std::exception &err) {
-    spdlog::error("Error: \n  {}\n\n {}", err.what(), program.help().str());
-    std::exit(1);
+    std::cerr << "Error: \n  " << err.what() << "\n\n " << program.help().str();
+    return 1;
   }
 
+  const bool json_output = program.get<bool>("--json");
+  if (json_output) {
+    spdlog::set_default_logger(spdlog::stderr_logger_mt("json_diagnostics"));
+    if (!program.is_used("--query")) {
+      SPDLOG_ERROR("--json requires --query");
+      return 1;
+    }
+  }
   spdlog::set_pattern("[%Y-%m-%d %T.%f] [%l] [%s:%# thread %t] %v");
   // change log level and default logger
   if (SPDLOG_ACTIVE_LEVEL == SPDLOG_LEVEL_DEBUG) {
@@ -224,6 +236,7 @@ int main(int argc, char **argv) {
     SPDLOG_INFO("end of creating index");
   }
 
+  std::optional<pgvectorbench::QueryResult> query_result;
   if (program.is_used("--query")) {
     auto query_opt = program.get<std::string>("--query");
     std::unordered_map<std::string, std::string> query_opt_map;
@@ -239,7 +252,8 @@ int main(int argc, char **argv) {
         },
         ';');
     SPDLOG_INFO("start querying");
-    pgvectorbench::query(ds, cf.get(), query_opt_map);
+    query_result = pgvectorbench::query(ds, cf.get(), query_opt_map);
+    pgvectorbench::logQueryResult(*query_result);
     SPDLOG_INFO("end of queryring");
   }
 
@@ -262,5 +276,17 @@ int main(int argc, char **argv) {
     SPDLOG_INFO("end of tearing down");
   }
 
+  // Delay JSON until all requested phases have succeeded, including teardown.
+  if (json_output) {
+    std::cout << pgvectorbench::resultToJson(
+        {PGVECTORBENCH_VERSION, std::move(*query_result)});
+    std::cout.flush();
+    if (!std::cout) {
+      throw std::runtime_error("failed to write JSON results");
+    }
+  }
   return 0;
+} catch (const std::exception &error) {
+  SPDLOG_ERROR("benchmark failed: {}", error.what());
+  return 1;
 }

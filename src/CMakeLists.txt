@@ -6,6 +6,7 @@ add_executable(
   setup.cc
   load.cc
   query.cc
+  result.cc
   teardown.cc
 )
 
@@ -38,6 +39,7 @@ target_link_libraries(
   PRIVATE concurrentqueue
   PRIVATE ryu::ryu
   PRIVATE spdlog::spdlog
+  PRIVATE nlohmann_json::nlohmann_json
   PRIVATE ${PG_LIBRARIES}
   PRIVATE pgvectorbench::parquet
   PRIVATE Threads::Threads

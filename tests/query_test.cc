@@ -1,3 +1,4 @@
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -8,15 +9,15 @@
 #include <arrow/api.h>
 #include <arrow/io/api.h>
 #include <gtest/gtest.h>
+#include <nlohmann/json.hpp>
 #include <parquet/arrow/writer.h>
 #include <spdlog/sinks/basic_file_sink.h>
 
 #include "dataset/dataset.h"
+#include "query.h"
 #include "utils/client_factory.h"
 
 namespace pgvectorbench {
-void query(const DataSet *, const ClientFactory *,
-           const std::unordered_map<std::string, std::string> &);
 void create_index(const DataSet *, const ClientFactory *,
                   const std::unordered_map<std::string, std::string> &);
 void load(const DataSet *, const ClientFactory *,
@@ -116,7 +117,12 @@ protected:
           } else if (operation == Operation::Load) {
             load(&ds, factory_.get(), options);
           } else {
-            query(&ds, factory_.get(), options);
+            try {
+              logQueryResult(query(&ds, factory_.get(), options));
+            } catch (const std::exception &error) {
+              SPDLOG_ERROR("query benchmark failed: {}", error.what());
+              std::exit(1);
+            }
           }
           std::exit(0);
         },
@@ -131,9 +137,41 @@ protected:
     return output;
   }
 
+  std::string runCli(std::vector<std::string> args, int exit_code = 0) {
+    args.insert(args.begin(), {PGVECTORBENCH_BINARY, "--json"});
+    std::vector<char *> argv;
+    for (auto &arg : args) {
+      argv.push_back(arg.data());
+    }
+    argv.push_back(nullptr);
+    const auto output_path = directory_ + "/stdout.json";
+    const auto error_path = directory_ + "/stderr.log";
+    EXPECT_EXIT(
+        {
+          alarm(15);
+          if (!std::freopen(output_path.c_str(), "w", stdout) ||
+              !std::freopen(error_path.c_str(), "w", stderr)) {
+            std::_Exit(126);
+          }
+          execv(argv.front(), argv.data());
+          std::_Exit(127);
+        },
+        testing::ExitedWithCode(exit_code), "");
+    std::ifstream input(output_path);
+    return std::string((std::istreambuf_iterator<char>(input)), {});
+  }
+
   std::string directory_;
   std::unique_ptr<ClientFactory> factory_;
 };
+
+TEST_F(QueryTest, JsonCliArgumentErrorsKeepStdoutEmpty) {
+  for (const auto &args : {std::vector<std::string>{},
+                           std::vector<std::string>{"--unknown-option"}}) {
+    EXPECT_TRUE(runCli(args, 1).empty());
+    EXPECT_GT(std::filesystem::file_size(directory_ + "/stderr.log"), 0);
+  }
+}
 
 TEST_F(QueryTest, RejectsInvalidPositiveOptionsBeforeOpeningFiles) {
   const auto ds = dataset();
@@ -291,11 +329,118 @@ protected:
     EXPECT_EQ(output.find("qps: inf"), std::string::npos) << output;
   }
 
+  void writeCliDataset() {
+    std::vector<std::vector<float>> queries(100, std::vector<float>(128, 0));
+    std::vector<std::vector<int32_t>> neighbors(
+        100, std::vector<int32_t>(100, 0));
+    writeVecs("siftsmall_query.fvecs", 128, queries);
+    writeVecs("siftsmall_groundtruth.ivecs", 100, neighbors);
+    exec("ALTER TABLE " + schema_ + ".items RENAME COLUMN emb TO embedding");
+  }
+
+  std::string runJsonCli(const std::string &options, int exit_code = 0,
+                        std::vector<std::string> extra = {}) {
+    std::vector<std::string> args = {
+        "--dbname", std::getenv("PGVECTORBENCH_TEST_DATABASE"),
+        "--path", directory_, "--query=" + options};
+    args.insert(args.end(), extra.begin(), extra.end());
+    return runCli(std::move(args), exit_code);
+  }
+
+  void validateCliJson(const std::string &output) {
+    nlohmann::json json;
+    ASSERT_NO_THROW(json = nlohmann::json::parse(output));
+    EXPECT_EQ(json.at("schema_version"), 1);
+    EXPECT_EQ(json.at("status"), "success");
+    EXPECT_FALSE(json.at("tool_version").get<std::string>().empty());
+    const auto &q = json.at("query");
+    const nlohmann::json dataset = {
+        {"name", "siftsmall"}, {"format", "fvecs"}, {"metric", "l2"},
+        {"dimensions", 128}, {"base_vectors", 10000}, {"query_vectors", 100},
+        {"ground_truth_neighbors", 100}};
+    EXPECT_EQ(q.at("dataset"), dataset);
+    const nlohmann::json config = {
+        {"table_name", "items"}, {"vector_column", "embedding"},
+        {"k1", 1}, {"k2", 2}, {"thread_num", 2}, {"loop", 3},
+        {"session_overrides", {{"hnsw.ef_search", "40"}}}};
+    EXPECT_EQ(q.at("config"), config);
+    EXPECT_EQ(q.at("latency_us").at("count"), 300);
+    EXPECT_EQ(q.at("recall").at("count"), 100);
+    EXPECT_EQ(q.at("recall").at("average"), 1);
+    EXPECT_EQ(q.at("latency_us").at("percentiles").at(1).at("percentage"), 99.5);
+    EXPECT_GT(q.at("elapsed_seconds").get<double>(), 0);
+    EXPECT_GT(q.at("qps").get<double>(), 0);
+  }
+
   std::unique_ptr<Client> admin_;
   std::string schema_;
   std::optional<std::string> old_options_;
   bool changed_options_ = false;
 };
+
+TEST_F(QueryDatabaseTest, ReturnsResolvedParametersAndSeparateSampleCounts) {
+  const auto ds = dataset();
+  const auto result =
+      query(&ds, factory_.get(),
+            {{"thread_num", "2"}, {"loop", "3"}, {"k1", "1"}, {"k2", "2"},
+             {"hnsw.ef_search", "40"}, {"percentages", "0,50,100"}});
+  EXPECT_EQ(result.dataset.name, "items");
+  EXPECT_EQ(result.dataset.format, "parquet");
+  EXPECT_EQ(result.dataset.metric, "l2");
+  EXPECT_EQ(result.dataset.dimensions, 2);
+  EXPECT_EQ(result.config.table_name, "items");
+  EXPECT_EQ(result.config.vector_column, "emb");
+  EXPECT_EQ(result.config.k1, 1);
+  EXPECT_EQ(result.config.k2, 2);
+  EXPECT_EQ(result.config.thread_num, 2);
+  EXPECT_EQ(result.config.loop, 3);
+  EXPECT_EQ(result.config.session_overrides.at("hnsw.ef_search"), "40");
+  EXPECT_EQ(result.latency_us.count, 6);
+  EXPECT_EQ(result.recall.count, 2);
+  EXPECT_EQ(result.recall.average, 1);
+  ASSERT_EQ(result.latency_us.percentiles.size(), 3);
+  EXPECT_EQ(result.latency_us.percentiles.front().value, result.latency_us.best);
+  EXPECT_EQ(result.latency_us.percentiles.back().value, result.latency_us.worst);
+  EXPECT_GT(result.elapsed_seconds, 0);
+  EXPECT_DOUBLE_EQ(result.qps, 6 / result.elapsed_seconds);
+
+  const auto defaults = query(&ds, factory_.get(), {{"thread_num", "1"}});
+  EXPECT_EQ(defaults.config.k1, ds.gt_topk_);
+  EXPECT_EQ(defaults.config.k2, ds.gt_topk_);
+  EXPECT_EQ(defaults.config.loop, 1);
+  EXPECT_TRUE(defaults.config.session_overrides.empty());
+  EXPECT_TRUE(defaults.latency_us.percentiles.empty());
+}
+
+TEST_F(QueryDatabaseTest, JsonCliEmitsOneDocumentAndSupportsLogFiles) {
+  writeCliDataset();
+  const std::string options =
+      "table_name=items;thread_num=2;loop=3;k1=1;k2=2;"
+      "hnsw.ef_search=40;percentages=50,99.5";
+  validateCliJson(runJsonCli(options));
+  std::ifstream diagnostics(directory_ + "/stderr.log");
+  const std::string stderr_text((std::istreambuf_iterator<char>(diagnostics)), {});
+  EXPECT_NE(stderr_text.find("qps:"), std::string::npos);
+
+  validateCliJson(runJsonCli(options, 0,
+                             {"--log", directory_ + "/query.log",
+                              "--teardown=table_name=items"}));
+  EXPECT_GT(std::filesystem::file_size(directory_ + "/query.log"), 0);
+  EXPECT_EQ(std::filesystem::file_size(directory_ + "/stderr.log"), 0);
+}
+
+TEST_F(QueryDatabaseTest, JsonCliSuppressesOutputOnQueryOrTeardownFailure) {
+  writeCliDataset();
+  EXPECT_TRUE(runJsonCli("thread_num=1;loop=0", 1).empty());
+  EXPECT_TRUE(runJsonCli("thread_num=1;table_name=missing_table", 1).empty());
+  EXPECT_TRUE(
+      runJsonCli("thread_num=1;table_name=items;hnsw.ef_search='", 1).empty());
+  EXPECT_TRUE(runJsonCli("thread_num=1;table_name=items", 1,
+                         {"--teardown=table_name=missing_table;truncate=y"})
+                  .empty());
+  std::filesystem::remove(directory_ + "/siftsmall_query.fvecs");
+  EXPECT_TRUE(runJsonCli("thread_num=1;table_name=items", 1).empty());
+}
 
 TEST_F(QueryDatabaseTest, AlignsReorderedQueriesAndGroundTruthsById) {
   writeQueries({1, 0}, {{1, 1}, {0, 0}});

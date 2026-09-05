@@ -78,8 +78,8 @@ ctest --preset default
 ```
 
 CMake downloads and builds pinned Arrow, Parquet, argparse, concurrentqueue,
-spdlog, and Ryu sources inside the build directory. Release archives are
-verified with SHA256 checksums. Git submodules and system Arrow packages are not
+spdlog, Ryu, and nlohmann/json sources inside the build directory. Release
+archives are verified with SHA256 checksums. Git submodules and system Arrow packages are not
 required. Dependency versions, source URLs, commit IDs, and checksums are
 maintained in `cmake/ThirdParty.cmake`; edit a URL there when a different source
 is required.
@@ -201,6 +201,60 @@ Parquet query and ground-truth files must each contain every query ID exactly
 once, from `0` to the configured query count minus one. Row order may differ
 between files; rows are matched by ID. Embeddings must have the configured
 dimension, and each ground-truth row must provide at least `k1` neighbors.
+
+### JSON results
+
+Add `--json` to a command containing `--query` to write a single JSON document
+to stdout. Diagnostics and the usual text statistics go to stderr, or to the
+file specified by `--log`.
+
+```sh
+./pgvectorbench -d postgres --path /opt/datasets/vecs/siftsmall \
+  --query="thread_num=8;loop=10;k1=10;k2=10;hnsw.ef_search=100;percentages=50,95,99" \
+  --json > result.json
+
+jq '.query | {qps, elapsed_seconds, latency_us, recall}' result.json
+```
+
+The table must already be loaded, or the command can include `--setup`,
+`--load`, and `--index` as usual. JSON is emitted only after **all requested
+phases succeed**, including teardown. Invalid arguments, dataset errors, and
+failed SQL/SET commands exit nonzero without emitting a JSON result. Check the
+exit code before consuming the output file; failed runs may leave an empty
+file when stdout is redirected. `--json` without `--query` is an error.
+
+The versioned result has these fields:
+
+| Field | Meaning |
+|-------|---------|
+| `schema_version` | JSON schema version, currently `1` |
+| `tool_version` | Version of pgvectorbench that produced the result |
+| `status` | `"success"`; unsuccessful runs do not produce a result |
+| `query.dataset` | Dataset name, format, metric, dimensions, base/query vector counts, and ground-truth neighbor count |
+| `query.config` | Resolved table/column, `k1`, `k2`, `thread_num`, `loop`, and explicit `session_overrides` |
+| `query.elapsed_seconds` | Query worker wall time used to calculate QPS |
+| `query.qps` | Completed queries divided by query worker wall time |
+| `query.latency_us` | Latency distribution in microseconds: `count`, `best`, `worst`, `average`, and `percentiles` |
+| `query.recall` | Recall `k1@k2` distribution in `[0,1]`, with the same fields |
+
+Each percentile is an object such as `{"percentage":99.5,"value":1234}`.
+Percentiles follow the supplied order, including repeated percentages; the
+array is empty when `percentages` is omitted. The existing ranking is preserved:
+latency percentiles run from fastest to slowest, and recall percentiles run
+from highest to lowest recall.
+
+Latency `count` is `query_vectors × loop`; recall `count` is `query_vectors`,
+because recall uses only each query's final iteration. Dataset counts come from
+the dataset definition, not a database inspection. `session_overrides` contains
+only explicitly applied `hnsw.ef_search` and `ivfflat.probes` values; omitted
+server defaults are not inferred. Connection credentials and query vectors are
+not included in the result.
+
+JSON uses the same computed `QueryResult` as the text statistics, with full
+floating-point precision. The timing methodology is unchanged: query worker
+wall time includes thread startup, session SET commands, and completion, but
+excludes dataset preparation, connection creation, and recall aggregation.
+Individual latency includes the database round trip and result handling.
 
 ### docker
 
