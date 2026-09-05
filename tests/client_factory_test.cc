@@ -1,6 +1,8 @@
 #include <cstdlib>
 #include <memory>
 
+#include <gtest/gtest.h>
+
 #include "utils/client_factory.h"
 
 namespace {
@@ -15,41 +17,31 @@ bool tuplesSucceeded(PGresult *result) {
 
 } // namespace
 
-int main() {
+TEST(ClientFactoryTest, ConnectionRemainsUsableAfterSuccessfulAndFailedCopy) {
   const char *database = std::getenv("PGVECTORBENCH_TEST_DATABASE");
   if (database == nullptr) {
-    return 77;
+    GTEST_SKIP() << "Set PGVECTORBENCH_TEST_DATABASE to run database tests";
   }
 
   auto factory = pgvectorbench::ClientFactory::createBuilder()
                      .setDBName(database)
                      .build();
   auto client = factory->createClient();
-  if (!client) {
-    return 1;
-  }
+  ASSERT_NE(client, nullptr);
 
-  if (!client->executeQuery("CREATE TEMP TABLE copy_test (id integer);",
-                            commandSucceeded)) {
-    return 1;
-  }
+  ASSERT_TRUE(client->executeQuery("CREATE TEMP TABLE copy_test (id integer);",
+                                   commandSucceeded));
 
   constexpr char copy_statement[] = "COPY copy_test FROM STDIN";
   constexpr char valid_row[] = "1\n";
-  if (!client->copy(copy_statement, valid_row, sizeof(valid_row) - 1,
-                    commandSucceeded)) {
-    return 1;
-  }
+  ASSERT_TRUE(client->copy(copy_statement, valid_row, sizeof(valid_row) - 1,
+                           commandSucceeded));
 
-  if (!client->executeQuery("SELECT 1;", tuplesSucceeded)) {
-    return 1;
-  }
+  ASSERT_TRUE(client->executeQuery("SELECT 1;", tuplesSucceeded));
 
   constexpr char invalid_row[] = "not-an-integer\n";
-  if (client->copy(copy_statement, invalid_row, sizeof(invalid_row) - 1,
-                   commandSucceeded)) {
-    return 1;
-  }
+  EXPECT_FALSE(client->copy(copy_statement, invalid_row, sizeof(invalid_row) - 1,
+                            commandSucceeded));
 
-  return client->executeQuery("SELECT 1;", tuplesSucceeded) ? 0 : 1;
+  EXPECT_TRUE(client->executeQuery("SELECT 1;", tuplesSucceeded));
 }

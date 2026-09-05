@@ -84,6 +84,17 @@ required. Dependency versions, source URLs, commit IDs, and checksums are
 maintained in `cmake/ThirdParty.cmake`; edit a URL there when a different source
 is required.
 
+With `BUILD_TESTING=ON` (the default), CMake also downloads and builds pinned
+GoogleTest sources. C++ tests use GoogleTest and are discovered automatically by
+CTest; the CLI smoke tests run directly through CTest. Configure with
+`-DBUILD_TESTING=OFF` to omit tests and the GoogleTest dependency.
+
+The database test is skipped unless `PGVECTORBENCH_TEST_DATABASE` is set. To run
+it against a local PostgreSQL instance, use
+`PGVECTORBENCH_TEST_DATABASE=postgres ctest --preset default`. Standard libpq
+environment variables such as `PGHOST`, `PGPORT`, and `PGUSER` control the
+connection.
+
 To use system-installed Arrow and Parquet instead, configure with
 `-DPGVECTORBENCH_USE_SYSTEM_ARROW=ON`. For example, on Debian:
 
