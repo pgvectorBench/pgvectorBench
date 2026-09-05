@@ -29,7 +29,16 @@ target_include_directories(
 
 target_link_libraries(
   parquet_ground_truth_test
-  PRIVATE Arrow::arrow_shared
+  PRIVATE pgvectorbench::arrow
 )
 
 add_test(NAME parquet_ground_truth_test COMMAND parquet_ground_truth_test)
+
+add_executable(parquet_zstd_test parquet_zstd_test.cc)
+
+target_link_libraries(
+  parquet_zstd_test
+  PRIVATE pgvectorbench::parquet
+)
+
+add_test(NAME parquet_zstd_test COMMAND parquet_zstd_test)

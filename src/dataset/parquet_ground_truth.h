@@ -9,8 +9,9 @@
 
 namespace pgvectorbench {
 
+template <typename ListArrayType>
 inline void copyParquetGroundTruthRow(
-    const arrow::Int64Array &ids, const arrow::ListArray &neighbors,
+    const arrow::Int64Array &ids, const ListArrayType &neighbors,
     const arrow::Int64Array &neighbor_values, int64_t row, size_t top_k,
     std::vector<std::vector<int64_t>> &ground_truths) {
   if (ids.IsNull(row) || neighbors.IsNull(row)) {

@@ -24,7 +24,6 @@ set_target_properties(
 target_include_directories(
   pgvectorbench
   PRIVATE ${PG_INCLUDE_DIRS}
-  PRIVATE ${PARQUET_INCLUDE_DIR}
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
@@ -40,7 +39,7 @@ target_link_libraries(
   PRIVATE ryu::ryu
   PRIVATE spdlog::spdlog
   PRIVATE ${PG_LIBRARIES}
-  PRIVATE Parquet::parquet_shared
+  PRIVATE pgvectorbench::parquet
   PRIVATE Threads::Threads
 )
 

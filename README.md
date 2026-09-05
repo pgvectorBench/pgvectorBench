@@ -55,20 +55,19 @@ Datasets details:
 
 ### Prerequisite
 
+CMake 3.25 or newer and a C++20 compiler are required.
+
 **MacOS**
 
 ```
-brew install apache-arrow git
-brew install libpq
+brew install cmake git libpq
 ```
 
 **Debian**
 
 ```
-wget https://apache.jfrog.io/artifactory/arrow/$(lsb_release --id --short | tr 'A-Z' 'a-z')/apache-arrow-apt-source-latest-$(lsb_release --codename --short).deb
-sudo apt install -y -V ./apache-arrow-apt-source-latest-$(lsb_release --codename --short).deb
 sudo apt update
-sudo apt install -y git libparquet-dev libpq-dev
+sudo apt install -y cmake g++ git libpq-dev
 ```
 
 ```
@@ -76,12 +75,24 @@ cmake -S . -B build
 cmake --build build --parallel
 ```
 
-CMake downloads pinned argparse, concurrentqueue, and spdlog release archives
-and clones Ryu at a fixed commit from its master branch into the build directory.
-Release archives are verified with SHA256 checksums. Git submodules are not
+CMake downloads and builds pinned Arrow, Parquet, argparse, concurrentqueue,
+spdlog, and Ryu sources inside the build directory. Release archives are
+verified with SHA256 checksums. Git submodules and system Arrow packages are not
 required. Dependency versions, source URLs, commit IDs, and checksums are
 maintained in `cmake/ThirdParty.cmake`; edit a URL there when a different source
 is required.
+
+To use system-installed Arrow and Parquet instead, configure with
+`-DPGVECTORBENCH_USE_SYSTEM_ARROW=ON`. For example, on Debian:
+
+```
+wget https://packages.apache.org/artifactory/arrow/$(lsb_release --id --short | tr 'A-Z' 'a-z')/apache-arrow-apt-source-latest-$(lsb_release --codename --short).deb
+sudo apt install -y -V ./apache-arrow-apt-source-latest-$(lsb_release --codename --short).deb
+sudo apt update
+sudo apt install -y libparquet-dev
+cmake -S . -B build-system -DPGVECTORBENCH_USE_SYSTEM_ARROW=ON
+cmake --build build-system --parallel
+```
 
 ## Build docker image
 
