@@ -32,15 +32,13 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          submodules: recursive
 
       - name: Install build dependencies
         shell: bash
         run: |
           set -euxo pipefail
           sudo apt-get update
-          sudo apt-get install -y ca-certificates cmake g++ libpq-dev lsb-release ninja-build postgresql wget
+          sudo apt-get install -y ca-certificates cmake g++ git libpq-dev lsb-release ninja-build postgresql wget
 
           distro="$(lsb_release --id --short | tr 'A-Z' 'a-z')"
           codename="$(lsb_release --codename --short)"
@@ -81,12 +79,10 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          submodules: recursive
 
       - name: Install build dependencies
         run: |
-          brew install apache-arrow cmake ninja postgresql@17
+          brew install apache-arrow cmake git ninja postgresql@17
           echo "$(brew --prefix postgresql@17)/bin" >> "$GITHUB_PATH"
 
       - name: Start test database

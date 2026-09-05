@@ -158,7 +158,7 @@ int main(int argc, char **argv) {
       std::exit(1);
     }
   }
-  SPDLOG_INFO("dataset: \n{}", *ds);
+  SPDLOG_INFO("dataset: \n{}", fmt::streamed(*ds));
 
   bool index_created = false;
   if (program.is_used("--setup")) {
