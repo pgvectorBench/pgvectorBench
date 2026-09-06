@@ -348,19 +348,22 @@ protected:
   void validateCliJson(const std::string &output) {
     nlohmann::json json;
     ASSERT_NO_THROW(json = nlohmann::json::parse(output));
-    EXPECT_EQ(json.at("schema_version"), 2);
+    EXPECT_EQ(json.at("schema_version"), 3);
     EXPECT_EQ(json.at("status"), "success");
     EXPECT_FALSE(json.at("tool_version").get<std::string>().empty());
     const auto &q = json.at("query");
     const nlohmann::json dataset = {
         {"name", "siftsmall"}, {"format", "fvecs"}, {"metric", "l2"},
         {"dimensions", 128}, {"base_vectors", 10000}, {"query_vectors", 100},
-        {"ground_truth_neighbors", 100}};
+        {"ground_truth_neighbors", 100}, {"vector_type", "vector"}};
     EXPECT_EQ(q.at("dataset"), dataset);
     const nlohmann::json config = {
         {"table_name", "items"}, {"vector_column", "embedding"},
         {"k1", 1}, {"k2", 2}, {"thread_num", 2}, {"loop", 3},
-        {"session_overrides", {{"hnsw.ef_search", "40"}}}};
+        {"session_overrides", {{"hnsw.ef_search", "40"}}},
+        {"storage_type", "vector"}, {"index_representation", "native"},
+        {"search_metric", "l2"}, {"evaluation_metric", "l2"},
+        {"require_index", nullptr}, {"rerank", false}, {"candidate_k", 2}};
     EXPECT_EQ(q.at("config"), config);
     EXPECT_EQ(q.at("latency_us").at("count"), 300);
     EXPECT_EQ(q.at("recall").at("count"), 100);
@@ -666,10 +669,10 @@ TEST_F(QueryDatabaseTest, SqlFailureSuppressesAllStatistics) {
 }
 
 TEST_F(QueryDatabaseTest, QuerySetFailureSuppressesAllStatistics) {
-  // This built-in setting rejects zero even without the pgvector extension.
+  // Query settings cannot inject additional statements.
   EXPECT_NE(run(dataset(), {{"hnsw.ef_search", "1; SET work_mem = 0"},
                             {"thread_num", "2"}})
-                .find("no statistics will be reported"),
+                .find("invalid numeric query setting"),
             std::string::npos);
 }
 

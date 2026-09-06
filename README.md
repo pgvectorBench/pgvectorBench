@@ -51,6 +51,39 @@ Datasets details:
 | openai_large_5m_filter99 | Parquet | COSINE | 1536 | 5,000,000 | 1,000 | same  as 👆🏻 |
 | laion_large_100m | Parquet | L2 | 768 | 100,000,000 | 1,000 | aws s3 cp s3://assets.zilliz.com/benchmark/laion_large_100m/ ./laion_large_100m/ --region us-west-2 --recursive --no-sign-request |
 
+## Vector types and additional datasets
+
+HNSW supports `vector`, `halfvec`, and `sparsevec` with L2, inner product,
+cosine, and L1 distances; `bit` supports Hamming and Jaccard. IVFFlat supports
+`vector` and `halfvec` with L2, inner product, and cosine, plus `bit` with
+Hamming. Unsupported combinations fail before CLI setup creates a table.
+
+Use `--storage-type=halfvec` to load existing dense datasets into half precision.
+Use `--index-representation=halfvec` or `binary` with vector storage to build
+expression indexes while retaining full-precision vectors. Supply the same
+options when running the phases independently. Defaults preserve the existing
+native-vector workflow.
+
+```sh
+./build/pgvectorbench -d postgres -D cohere_small_100k --path /data/cohere \
+  --index-representation=binary --setup --load \
+  --index="index_type=hnsw;m=16;ef_construction=64" \
+  --query="k1=10;k2=10;thread_num=1;rerank=true;candidate_k=100;hnsw.ef_search=200" --json
+```
+
+`rerank=true` requires vector storage and an expression index. It selects
+`candidate_k` candidates (default `max(100,k2)`) and reranks by the original
+dataset distance. Without reranking, `k2` candidates are returned directly.
+Binary quantization searches by Hamming; recall is always measured against the
+dataset's original ground truth. `k1` and `k2` keep their existing meanings.
+
+`--dataset-config` accepts a JSON dataset description instead of a built-in
+`--dataset` name. Optional Python tools download/convert SIFT-Hamming, Kosarak,
+SPLADE, Cohere/OpenAI, and BioASQ, and derive exact L1 ground truth for siftsmall.
+C++ continues to depend only on Arrow/Parquet for these datasets.
+See [dataset preparation, schema, and benchmarks](datasets/README.md) for commands,
+format details, limitations, and the reproducible benchmark matrix.
+
 ## Build from source
 
 ### Prerequisite
@@ -227,10 +260,11 @@ failed SQL/SET commands exit nonzero without emitting a JSON result. Check the
 exit code before consuming the output file; failed runs may leave an empty
 file when stdout is redirected. `--json` without any phase is an error.
 
-Schema version **2** preserves the existing fields inside `query` and adds
-environment and phase results. Unexecuted phases are `null`, including `query`
-for load-only or index-only runs. Consumers of schema version 1 should accept
-version 2 and check for `null` before reading a phase. For example:
+Schema version **3** preserves the phase and statistics fields and adds vector
+types, index representations, search/evaluation metrics, reranking parameters,
+and optional query plans. Unexecuted phases are `null`, including `query`
+for load-only or index-only runs. Consumers of schema versions 1 and 2 should accept
+version 3 and check for `null` before reading a phase. For example:
 
 ```sh
 ./pgvectorbench -d postgres --path /opt/datasets/vecs/siftsmall \
@@ -244,7 +278,7 @@ The versioned result has these fields:
 
 | Field | Meaning |
 |-------|---------|
-| `schema_version` | JSON schema version, currently `2` |
+| `schema_version` | JSON schema version, currently `3` |
 | `tool_version` | Version of pgvectorbench that produced the result |
 | `status` | `"success"`; unsuccessful runs do not produce a result |
 | `environment` | Database name, PostgreSQL/pgvector versions, and settings on a separate inspection connection |
@@ -270,9 +304,10 @@ from highest to lowest recall.
 Latency `count` is `query_vectors × loop`; recall `count` is `query_vectors`,
 because recall uses only each query's final iteration. Dataset counts come from
 the dataset definition, not a database inspection. `session_overrides` contains
-only explicitly applied `hnsw.ef_search` and `ivfflat.probes` values; omitted
+only explicitly applied HNSW/IVFFlat search setting values; omitted
 server defaults are reported separately in `effective_settings`. Connection
-credentials and query vectors are not included in the result.
+credentials are not included in the result. Query vectors are omitted unless
+`explain=true` is requested; PostgreSQL plans may contain vector literals.
 
 Each table snapshot includes resolved schema/name, column names/types/vector dimensions,
 `estimated_rows`, `table_size_bytes` (including TOAST and auxiliary forks),
@@ -309,10 +344,10 @@ Environment inspection and effective-settings collection are outside query timin
 
 Before loading, indexing, or reading query files, the CLI resolves the target
 through PostgreSQL's `search_path` (schema-qualified and quoted table names work)
-and checks that the dataset's vector column is `vector(n)` with the expected
-dimension. Query runs also require an integer `id` column. Missing tables report
+and checks that the dataset's vector column has the selected storage type
+and expected dimension. Query runs also require an integer `id` column. Missing tables report
 the connected database name, so connecting to the wrong database fails early.
-Unbounded `vector` columns and views are not supported by this preflight.
+Unbounded vector columns and views are not supported by this preflight.
 
 A missing, invalid, partial, or differently configured ANN index produces a
 warning when no valid non-partial index matches the vector column and distance
@@ -333,3 +368,15 @@ If you are using docker, you should mount the host's datasets directory to the c
 ```
 docker run -it --mount type=bind,source=/home/zhjwpku/datasets,target=/opt/datasets pgvectorbench -h 192.168.31.32 -U zhjwpku -d postgres --query="loop=10;hnsw.ef_search=100;percentages=90,99,99.9"
 ```
+
+Query settings also accept `hnsw.iterative_scan`, `hnsw.max_scan_tuples`,
+`hnsw.scan_mem_multiplier`, `ivfflat.iterative_scan`, and `ivfflat.max_probes`.
+They apply only to query worker sessions and are recorded in JSON. Add
+`explain=true` to the query options to capture the first query's `EXPLAIN
+(FORMAT JSON)` outside measurement, using the same search settings. This is a
+sample plan, not a guarantee that every query uses that index.
+
+For index-only performance validation, `require_index=INDEX_NAME` in query options
+implies `explain=true` and aborts before measurement if the first query's plan
+does not use that index. The plan is preserved in diagnostics and no successful
+JSON result is emitted. This still checks a sample plan, not all query plans.

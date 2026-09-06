@@ -13,6 +13,7 @@
 
 // third party
 #include <arrow/api.h>
+#include <nlohmann/json.hpp>
 #include <parquet/arrow/reader.h>
 #include <parquet/exception.h>
 #include <ryu/ryu.h>
@@ -31,11 +32,19 @@ namespace pgvectorbench {
 
 namespace {
 
+bool planUsesIndex(const nlohmann::json &plan, const std::string &name) {
+  if (plan.is_object() && plan.contains("Index Name") && plan["Index Name"] == name) return true;
+  if (plan.is_structured()) {
+    for (const auto &child : plan) if (planUsesIndex(child, name)) return true;
+  }
+  return false;
+}
+
 template <typename DataType>
 std::vector<std::string>
 prepareVecsQueries(const DataSet *dataset,
                    const std::optional<std::string> &table_name,
-                   size_t top_k2) {
+                   size_t top_k2, bool rerank, size_t candidate_k) {
   // test query file path
   auto file_path = dataset->location_ + dataset->query_file_.first;
   std::unique_ptr<util::FileReader> reader =
@@ -57,12 +66,6 @@ prepareVecsQueries(const DataSet *dataset,
                    // strings
 
   std::ostringstream oss;
-  oss << "SELECT id FROM "
-      << (table_name.has_value() ? table_name.value() : dataset->name_);
-  oss << " ORDER BY " << dataset->vector_field_ << " "
-      << metric2operator(dataset->metric_) << " ";
-
-  std::string sql_prefix = oss.str();
 
   for (size_t i = 0; i < rowcnt; i++) {
     reader->read(buffer, rowsize, rowsize * i);
@@ -72,7 +75,7 @@ prepareVecsQueries(const DataSet *dataset,
       throw std::runtime_error("VECS query dimension does not match dataset");
     }
 
-    oss << "'[";
+    oss << "[";
     if constexpr (std::is_same_v<DataType, float>) {
       for (size_t j = 0; j < dim; j++) {
         float value;
@@ -93,11 +96,10 @@ prepareVecsQueries(const DataSet *dataset,
         }
       }
     }
-    oss << "]' LIMIT " << top_k2 << ";";
-
-    queries.push_back(oss.str());
+    oss << "]";
+    queries.push_back(searchSql(*dataset, table_name.value_or(dataset->name_),
+                                oss.str(), top_k2, rerank, candidate_k));
     oss.str("");
-    oss << sql_prefix;
   }
 
   return queries;
@@ -149,7 +151,7 @@ template <typename DataType>
 std::vector<std::string>
 prepareParquetQueries(const DataSet *dataset,
                       const std::optional<std::string> &table_name,
-                      size_t top_k2) {
+                      size_t top_k2, bool rerank, size_t candidate_k) {
   // test query file path
   auto file_path = dataset->location_ + dataset->query_file_.first;
   arrow::MemoryPool *pool = arrow::default_memory_pool();
@@ -181,24 +183,6 @@ prepareParquetQueries(const DataSet *dataset,
   std::vector<std::string> queries(dataset->query_file_.second);
   size_t rows = 0;
 
-  std::ostringstream oss;
-  oss << "SELECT id FROM "
-      << (table_name.has_value() ? table_name.value() : dataset->name_);
-  if (!dataset->filter_fields_.empty()) {
-    oss << " WHERE ";
-    for (const auto &filter : dataset->filter_fields_) {
-      oss << std::get<0>(filter); // prologue
-      oss << std::get<1>(filter); // field name
-      oss << std::get<2>(filter); // operator
-      oss << std::get<3>(filter); // value
-      oss << std::get<4>(filter); // epilogue
-    }
-  }
-  oss << " ORDER BY " << dataset->vector_field_ << " "
-      << metric2operator(dataset->metric_) << " ";
-
-  std::string sql_prefix = oss.str();
-
   std::shared_ptr<arrow::RecordBatch> recordBatch;
   do {
     status = rb_reader->ReadNext(&recordBatch);
@@ -216,10 +200,9 @@ prepareParquetQueries(const DataSet *dataset,
         if (!sql.empty()) {
           throw std::runtime_error("duplicate query row id");
         }
-        sql = sql_prefix + "'" +
-              formatParquetEmbedding<DataType>(*recordBatch->column(1), i,
-                                               dataset->dim_) +
-              "' LIMIT " + std::to_string(top_k2) + ";";
+        sql = searchSql(*dataset, table_name.value_or(dataset->name_),
+                        formatTypedEmbedding<DataType>(*recordBatch->column(1), i, *dataset),
+                        top_k2, rerank, candidate_k);
         ++rows;
       }
     }
@@ -361,16 +344,18 @@ std::vector<std::string> generateQueryOptions(
     const std::unordered_map<std::string, std::string> &query_opt_map) {
   std::vector<std::string> sqls;
 
-  // hnsw
-  if (query_opt_map.find("hnsw.ef_search") != query_opt_map.end()) {
-    sqls.push_back(fmt::format("SET hnsw.ef_search = {}",
-                               query_opt_map.at("hnsw.ef_search")));
-  }
-
-  // ivfflat
-  if (query_opt_map.find("ivfflat.probes") != query_opt_map.end()) {
-    sqls.push_back(fmt::format("SET ivfflat.probes = {}",
-                               query_opt_map.at("ivfflat.probes")));
+  for (const auto &name : querySettingNames) {
+    auto it = query_opt_map.find(name);
+    if (it == query_opt_map.end()) continue;
+    const auto &value = it->second;
+    if (name.ends_with("iterative_scan")) {
+      if (value != "off" && value != "relaxed_order" &&
+          !(name == "hnsw.iterative_scan" && value == "strict_order"))
+        throw std::runtime_error("invalid iterative_scan mode: " + value);
+    } else if (value.empty() || value.find_first_not_of("0123456789.") != std::string::npos) {
+      throw std::runtime_error("invalid numeric query setting: " + name);
+    }
+    sqls.push_back("SET " + name + " = '" + value + "'");
   }
 
   return sqls;
@@ -412,6 +397,18 @@ QueryResult query(
   const size_t top_k2 =
       positive_option("k2", dataset->gt_topk_, dataset->gt_topk_);
   const size_t top_k1 = positive_option("k1", top_k2, top_k2);
+  bool rerank = false;
+  if (auto value = Util::getValueFromMap(query_opt_map, "rerank")) {
+    if (*value != "true" && *value != "false") throw std::runtime_error("rerank must be true or false");
+    rerank = *value == "true";
+  }
+  const size_t candidate_k = rerank
+      ? positive_option("candidate_k", std::max(size_t(100), top_k2), std::numeric_limits<int>::max()) : top_k2;
+  if (query_opt_map.contains("candidate_k") && !rerank)
+    throw std::runtime_error("candidate_k requires rerank=true");
+  if (rerank && (dataset->storage_type_ != VectorType::VECTOR ||
+      dataset->representation_ == IndexRepresentation::NATIVE || candidate_k < top_k2))
+    throw std::runtime_error("rerank requires vector storage, an expression index and candidate_k >= k2");
   const size_t thread_num = positive_option(
       "thread_num",
       size_t(std::max(1u, std::thread::hardware_concurrency())) * 2,
@@ -450,18 +447,18 @@ QueryResult query(
   auto table_name = Util::getValueFromMap(query_opt_map, "table_name");
 
   if (dataset->format_ == DataSetFormat::FVECS_FORMAT) {
-    queries = prepareVecsQueries<float>(dataset, table_name, top_k2);
+    queries = prepareVecsQueries<float>(dataset, table_name, top_k2, rerank, candidate_k);
     gts = prepareVecsGroudTruths(dataset, top_k1);
   } else if (dataset->format_ == DataSetFormat::BVECS_FORMAT) {
-    queries = prepareVecsQueries<uint8_t>(dataset, table_name, top_k2);
+    queries = prepareVecsQueries<uint8_t>(dataset, table_name, top_k2, rerank, candidate_k);
     gts = prepareVecsGroudTruths(dataset, top_k1);
   } else {
     assert(dataset->format_ == DataSetFormat::PARQUET_FORMAT);
     if (dataset->base_type_ == DataSetBaseType::FLOAT) {
-      queries = prepareParquetQueries<float>(dataset, table_name, top_k2);
+      queries = prepareParquetQueries<float>(dataset, table_name, top_k2, rerank, candidate_k);
     } else {
       assert(dataset->base_type_ == DataSetBaseType::DOUBLE);
-      queries = prepareParquetQueries<double>(dataset, table_name, top_k2);
+      queries = prepareParquetQueries<double>(dataset, table_name, top_k2, rerank, candidate_k);
     }
     gts = prepareParquetGroundTruths(dataset, top_k1);
   }
@@ -487,6 +484,27 @@ QueryResult query(
       throw std::runtime_error("failed to connect a query worker");
     }
     clients.push_back(std::move(client));
+  }
+
+  std::optional<std::string> explain_plan;
+  auto required_index = Util::getValueFromMap(query_opt_map, "require_index");
+  bool explain = required_index.has_value();
+  if (required_index && required_index->empty()) throw std::runtime_error("require_index must not be empty");
+  if (auto value = Util::getValueFromMap(query_opt_map, "explain")) {
+    if (*value != "true" && *value != "false") throw std::runtime_error("explain must be true or false");
+    explain = explain || *value == "true";
+  }
+  if (explain) {
+    auto inspector = cf->createClient();
+    if (!inspector) throw std::runtime_error("failed to connect for EXPLAIN");
+    readServerSettings(*inspector);
+    for (const auto &sql : queryOptions) inspector->queryParams(sql);
+    auto plan = inspector->queryParams("EXPLAIN (FORMAT JSON) " + queries.front());
+    explain_plan = PQgetvalue(plan.get(), 0, 0);
+    if (required_index && !planUsesIndex(nlohmann::json::parse(*explain_plan), *required_index)) {
+      SPDLOG_WARN("sample plan: {}", *explain_plan);
+      throw std::runtime_error("target index not used by sample plan: " + *required_index);
+    }
   }
 
   std::vector<std::thread> threads;
@@ -596,16 +614,25 @@ QueryResult query(
   p_latencies.add(latencies.data(), vcount);
   p_recalls.add(recalls.data(), count);
   QueryResult result;
+  result.explain_plan = std::move(explain_plan);
   result.dataset = {dataset->name_, formatName(dataset->format_),
                      metricName(dataset->metric_), dataset->dim_,
                      dataset->total_cnt_, count, dataset->gt_topk_};
   result.config = {table_name.value_or(dataset->name_), dataset->vector_field_,
                     top_k1, top_k2, thread_num, loop, {}};
-  for (const auto *name : {"hnsw.ef_search", "ivfflat.probes"}) {
+  for (const auto &name : querySettingNames) {
     if (auto value = Util::getValueFromMap(query_opt_map, name)) {
       result.config.session_overrides.emplace(name, *value);
     }
   }
+  result.config.storage_type = typeName(dataset->storage_type_);
+  result.config.index_representation = representationName(dataset->representation_);
+  result.config.search_metric = distanceName(searchMetric(*dataset));
+  result.config.evaluation_metric = distanceName(dataset->metric_);
+  result.config.rerank = rerank;
+  result.config.require_index = required_index;
+  result.config.candidate_k = candidate_k;
+  result.dataset.vector_type = typeName(dataset->source_type_);
   result.elapsed_seconds = elapsed;
   result.qps = qps;
   result.latency_us = summarize(p_latencies, vcount, percentages);

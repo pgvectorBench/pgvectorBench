@@ -3,6 +3,7 @@
 #include <sstream>
 
 #include "dataset/dataset.h"
+#include "dataset/vector_config.h"
 #include "environment.h"
 #include "phases.h"
 #include "utils/client_factory.h"
@@ -26,8 +27,8 @@ std::string generateCreateHNSWIndexStatement(
   }
   oss << " ON "
       << (table_name.has_value() ? table_name.value() : dataset->name_)
-      << " USING hnsw (" << dataset->vector_field_ << " "
-      << metric2ops(dataset->metric_) << ")";
+      << " USING hnsw (" << indexExpression(*dataset, quoteIdentifier(dataset->vector_field_)) << " "
+      << indexOpclass(*dataset) << ")";
 
   if (m.has_value() || ef_construction.has_value()) {
     oss << " WITH (";
@@ -64,8 +65,8 @@ generateCreateIVFFlatIndexStatement(const DataSet *dataset,
   }
   oss << " ON "
       << (table_name.has_value() ? table_name.value() : dataset->name_)
-      << " USING ivfflat (" << dataset->vector_field_ << " "
-      << metric2ops(dataset->metric_) << ")";
+      << " USING ivfflat (" << indexExpression(*dataset, quoteIdentifier(dataset->vector_field_)) << " "
+      << indexOpclass(*dataset) << ")";
 
   if (lists.has_value()) {
     oss << " WITH (lists = " << lists.value() << ")";
@@ -163,6 +164,16 @@ IndexResult create_index(
   std::transform(index_type_lower_case.begin(), index_type_lower_case.end(),
                  index_type_lower_case.begin(),
                  [](unsigned char c) { return std::tolower(c); });
+  validateIndexConfig(*dataset, index_type_lower_case);
+  if (dataset->storage_type_ == VectorType::SPARSEVEC) {
+    // The sparsevec storage limit is 16000, but HNSW only accepts 1000 NNZ.
+    // Casting to text avoids materializing a billion-dimensional dense vector.
+    const auto col = quoteIdentifier(dataset->vector_field_);
+    auto rows = client->queryParams("SELECT 1 FROM " + table_name.value_or(dataset->name_) +
+        " WHERE (length(split_part(" + col + "::text, '}', 1)) - length(replace(split_part(" + col +
+        "::text, '}', 1), ':', ''))) > 1000 LIMIT 1");
+    if (PQntuples(rows.get())) throw std::runtime_error("HNSW sparsevec index requires at most 1000 nonzero elements per row; data was not pruned");
+  }
   if (index_type_lower_case == "hnsw") {
     auto m = Util::getValueFromMap(index_opt_map, "m");
     auto ef_construction =
@@ -197,6 +208,10 @@ IndexResult create_index(
   result.index_name = index_name.value_or(dataset->name_ + "_" + dataset->vector_field_ + "_idx");
   result.index_type = index_type_lower_case;
   result.effective_settings = readServerSettings(*client);
+  result.storage_type = typeName(dataset->storage_type_);
+  result.index_representation = representationName(dataset->representation_);
+  result.search_metric = distanceName(searchMetric(*dataset));
+  result.evaluation_metric = distanceName(dataset->metric_);
   SPDLOG_INFO("index built in {} s", result.elapsed_seconds);
   return result;
 }

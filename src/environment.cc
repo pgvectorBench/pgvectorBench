@@ -1,4 +1,5 @@
 #include "environment.h"
+#include "dataset/vector_config.h"
 
 #include <algorithm>
 #include <stdexcept>
@@ -148,10 +149,9 @@ TableResult preflight(const ClientFactory &factory, const DataSet &dataset,
     throw std::runtime_error("vector column " + dataset.vector_field_ +
                              " not found in table " + table);
   }
-  if (column->type_name != "vector" || column->dimensions != dataset.dim_) {
+  if (column->type_name != typeName(dataset.storage_type_) || column->dimensions != dataset.dim_) {
     throw std::runtime_error("table " + table + " column " + dataset.vector_field_ +
-        " has type " + column->type + "; expected vector(" +
-        std::to_string(dataset.dim_) + ") for dataset " + dataset.name_);
+        " has type " + column->type + "; expected " + sqlType(dataset.storage_type_, dataset.dim_) + " for dataset " + dataset.name_);
   }
   if (query) {
     const auto id = std::find_if(output.columns.begin(), output.columns.end(),
@@ -160,7 +160,12 @@ TableResult preflight(const ClientFactory &factory, const DataSet &dataset,
         (id->type_name != "int2" && id->type_name != "int4" && id->type_name != "int8")) {
       throw std::runtime_error("table " + table + " requires an integer id column");
     }
-    const auto expected = metric2ops(dataset.metric_);
+    const auto expected = indexOpclass(dataset);
+    auto normalized = [](std::string text) {
+      std::erase_if(text, [](unsigned char c) { return std::isspace(c) || c == '(' || c == ')' || c == '"'; });
+      return text;
+    };
+    const auto expression = normalized(indexExpression(dataset, quoteIdentifier(dataset.vector_field_)));
     bool matching_index = false;
     for (const auto &index : output.indexes) {
       if (!index.valid || !index.ready || index.predicate ||
@@ -168,7 +173,7 @@ TableResult preflight(const ClientFactory &factory, const DataSet &dataset,
         continue;
       }
       for (size_t i = 0; i < index.columns.size(); ++i) {
-        if (index.columns[i] == dataset.vector_field_ &&
+        if (normalized(index.columns[i]) == expression &&
             i < index.operator_classes.size() && index.operator_classes[i] == expected) {
           matching_index = true;
         }

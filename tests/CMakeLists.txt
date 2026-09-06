@@ -90,8 +90,8 @@ target_link_libraries(result_test PRIVATE GTest::gtest_main spdlog::spdlog
                                           nlohmann_json::nlohmann_json)
 gtest_discover_tests(result_test)
 
-add_executable(dataset_test dataset_test.cc ../src/dataset/dataset.cc)
+add_executable(dataset_test dataset_test.cc ../src/dataset/dataset.cc ../src/dataset/config.cc)
 target_include_directories(dataset_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(dataset_test PRIVATE GTest::gtest_main ryu::ryu spdlog::spdlog
-                                           pgvectorbench::arrow)
+                                           pgvectorbench::arrow nlohmann_json::nlohmann_json)
 gtest_discover_tests(dataset_test)

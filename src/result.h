@@ -64,6 +64,10 @@ struct LoadResult : PhaseResult {
 struct IndexResult : PhaseResult {
   std::string index_name;
   std::string index_type;
+  std::string storage_type = "vector";
+  std::string index_representation = "native";
+  std::string search_metric;
+  std::string evaluation_metric;
   std::map<std::string, std::string> effective_settings;
 };
 
@@ -93,6 +97,7 @@ struct DatasetResult {
   size_t base_vectors = 0; // Dataset metadata, not a database row count.
   size_t query_vectors = 0;
   size_t ground_truth_neighbors = 0;
+  std::string vector_type = "vector";
 };
 
 struct QueryConfig {
@@ -104,9 +109,17 @@ struct QueryConfig {
   size_t loop = 0;
   // Explicitly applied SET values, alongside the effective session settings.
   std::map<std::string, std::string> session_overrides;
+  std::string storage_type = "vector";
+  std::string index_representation = "native";
+  std::string search_metric;
+  std::string evaluation_metric;
+  std::optional<std::string> require_index;
+  bool rerank = false;
+  size_t candidate_k = 0;
 };
 
 struct QueryResult {
+  std::optional<std::string> explain_plan; // EXPLAIN JSON, outside measurement
   DatasetResult dataset;
   QueryConfig config;
   double elapsed_seconds = 0;

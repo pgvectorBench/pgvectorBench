@@ -8,6 +8,7 @@
 #include <spdlog/spdlog.h>
 
 #include "dataset/dataset.h"
+#include "dataset/vector_config.h"
 #include "query.h"
 #include "environment.h"
 #include "phases.h"
@@ -67,6 +68,11 @@ int main(int argc, char **argv) try {
                "openai_large_5m_filter1", "openai_large_5m_filter99",
                "laion_large_100m")
       .help("dataset name used to run the benchmark");
+
+  program.add_argument("--dataset-config").help("JSON dataset description (exclusive with --dataset)");
+  program.add_argument("--storage-type").help("vector, halfvec, bit, or sparsevec; defaults to source type");
+  program.add_argument("--index-representation").default_value(std::string("native"))
+      .choices("native", "halfvec", "binary").help("index and query representation");
 
   // dataset path
   program.add_argument("-P", "--path").help("dataset path");
@@ -150,18 +156,31 @@ int main(int argc, char **argv) try {
     cf_builder.setDBName(*dbname);
   }
 
+  if (program.is_used("--dataset-config") && program.is_used("--dataset"))
+    throw std::runtime_error("--dataset-config and --dataset are mutually exclusive");
+  auto selected = [&]() {
+    if (auto config = program.present("--dataset-config"))
+      return pgvectorbench::loadDataSetConfig(*config);
+    auto builtin = pgvectorbench::getDataSet(program.get<std::string>("--dataset"));
+    if (!builtin) throw std::runtime_error("unknown dataset");
+    return *builtin;
+  }();
+  auto ds = &selected;
+  pgvectorbench::configureVectors(*ds,
+      program.present("--storage-type") ? pgvectorbench::parseVectorType(*program.present("--storage-type")) : ds->source_type_,
+      pgvectorbench::parseRepresentation(program.get<std::string>("--index-representation")));
+  for (const auto phase : {"--setup", "--index"}) {
+    if (!program.is_used(phase)) continue;
+    auto options = phaseOptions(program, phase);
+    if (auto method = Util::getValueFromMap(options, "index_type")) {
+      std::transform(method->begin(), method->end(), method->begin(),
+                     [](unsigned char c) { return std::tolower(c); });
+      pgvectorbench::validateIndexConfig(*ds, *method);
+    }
+  }
   auto cf = cf_builder.build();
-  if (!cf->pingServer()) {
-    std::exit(1);
-  }
+  if (!cf->pingServer()) std::exit(1);
 
-  // get DataSet
-  std::string dataset = program.get<std::string>("--dataset");
-  auto ds = pgvectorbench::getDataSet(dataset);
-  if (ds == nullptr) {
-    SPDLOG_ERROR("dataset {} not exists", dataset);
-    std::exit(1);
-  }
   if (auto location = program.present("--path")) {
     if (fs::exists(*location) && fs::is_directory(*location)) {
       auto location_with_slash = *location;
