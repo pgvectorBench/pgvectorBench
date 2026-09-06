@@ -110,9 +110,8 @@ std::string RecordBatchToCopyContent(std::shared_ptr<arrow::RecordBatch> &batch,
     if (i != 0) {
       oss << '\n';
     }
-    oss << ids.Value(i) << " | "
-        << formatParquetEmbedding<DataType>(*batch->column(1), i,
-                                            dataset->dim_);
+    oss << ids.Value(i) << "|"
+        << formatTypedEmbedding<DataType>(*batch->column(1), i, *dataset);
   }
   return oss.str();
 }

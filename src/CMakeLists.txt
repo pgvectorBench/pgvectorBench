@@ -2,6 +2,7 @@ add_executable(
   pgvectorbench
   pgvectorbench.cc
   dataset/dataset.cc
+  dataset/config.cc
   index.cc
   setup.cc
   load.cc

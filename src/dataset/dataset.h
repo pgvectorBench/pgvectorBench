@@ -11,6 +11,9 @@
 
 namespace pgvectorbench {
 
+enum class VectorType : uint8_t { VECTOR, HALFVEC, BIT, SPARSEVEC };
+enum class IndexRepresentation : uint8_t { NATIVE, HALFVEC, BINARY };
+
 enum class DataSetFormat : uint8_t {
   FVECS_FORMAT, // float vector
   BVECS_FORMAT, // byte vector
@@ -111,11 +114,16 @@ struct DataSet {
   // groundtruth file, filename/result_cnt pair
   std::pair<std::string, size_t> gt_file_;
   size_t gt_topk_; // topk groudtruth results for each query
+
+  VectorType source_type_ = VectorType::VECTOR;
+  VectorType storage_type_ = VectorType::VECTOR;
+  IndexRepresentation representation_ = IndexRepresentation::NATIVE;
 };
 
 std::ostream &operator<<(std::ostream &os, const DataSet &dataset);
 
 DataSet *getDataSet(const std::string &ds_name);
+DataSet loadDataSetConfig(const std::string &filename);
 
 struct VecsBlock {
   VecsBlock(const char *buffer, size_t start_id, size_t batch_size,

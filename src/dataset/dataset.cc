@@ -3,6 +3,7 @@
 #include <unordered_map>
 
 #include "dataset.h"
+#include "vector_config.h"
 
 namespace pgvectorbench {
 
@@ -610,7 +611,10 @@ std::ostream &operator<<(std::ostream &os, const DataSet &dataset) {
   os << "dataset name: " << dataset.name_ << "\n";
   os << "location: " << dataset.location_ << "\n";
   os << "format: " << datasetFormatString(dataset.format_) << "\n";
-  os << "metric: " << metric2ops(dataset.metric_) << "\n";
+  os << "evaluation metric: " << distanceName(dataset.metric_) << "\n";
+  os << "source type: " << typeName(dataset.source_type_) << "\n";
+  os << "storage type: " << typeName(dataset.storage_type_) << "\n";
+  os << "index representation: " << representationName(dataset.representation_) << "\n";
   os << "vector dimension: " << dataset.dim_ << "\n";
   os << "base files:\n";
   for (const auto &base_file : dataset.base_files_) {

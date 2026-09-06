@@ -60,7 +60,7 @@ jobs:
         run: |
           set -euxo pipefail
           sudo apt-get update
-          sudo apt-get install -y ca-certificates cmake g++ git libpq-dev lsb-release ninja-build postgresql-16 postgresql-server-dev-16 wget
+          sudo apt-get install -y ca-certificates cmake g++ git libpq-dev lsb-release ninja-build postgresql-16 postgresql-server-dev-16 python3-venv wget
           echo "/usr/lib/postgresql/16/bin" >> "$GITHUB_PATH"
 
       - name: Install system Arrow and Parquet
@@ -98,6 +98,13 @@ jobs:
 
       - name: Run tests
         run: ctest --test-dir build --output-on-failure --no-tests=error
+
+      - name: Test data converters and vector type matrix
+        if: matrix.build_type == 'Release' && matrix.arrow_mode == 'vendored'
+        run: |
+          python3 -m venv build/data-tools-venv
+          build/data-tools-venv/bin/pip install -r tools/requirements.txt
+          build/data-tools-venv/bin/python -m unittest discover -s tools -p 'test_*.py' -v
 
       - name: Smoke-test CLI
         run: |

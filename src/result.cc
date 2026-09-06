@@ -61,7 +61,8 @@ Json tableToJson(const std::optional<TableResult> &table) {
   auto columns = Json::array();
   for (const auto &c : table->columns) {
     columns.push_back({{"name", c.name}, {"type", c.type},
-        {"dimensions", c.type_name == "vector" && c.dimensions >= 0
+        {"dimensions", (c.type_name == "vector" || c.type_name == "halfvec" ||
+                            c.type_name == "bit" || c.type_name == "sparsevec") && c.dimensions >= 0
                            ? Json(c.dimensions) : Json(nullptr)}});
   }
   auto indexes = Json::array();
@@ -91,6 +92,10 @@ Json indexToJson(const IndexResult &index) {
   output["index_name"] = index.index_name;
   output["index_type"] = index.index_type;
   output["effective_settings"] = index.effective_settings;
+  output["storage_type"] = index.storage_type;
+  output["index_representation"] = index.index_representation;
+  output["search_metric"] = index.search_metric;
+  output["evaluation_metric"] = index.evaluation_metric;
   return output;
 }
 
@@ -99,24 +104,29 @@ Json queryToJson(const QueryResult &q) {
   const auto &cfg = q.config;
   return {{"dataset",
            {{"name", ds.name}, {"format", ds.format}, {"metric", ds.metric},
-            {"dimensions", ds.dimensions}, {"base_vectors", ds.base_vectors},
+            {"vector_type", ds.vector_type}, {"dimensions", ds.dimensions}, {"base_vectors", ds.base_vectors},
             {"query_vectors", ds.query_vectors},
             {"ground_truth_neighbors", ds.ground_truth_neighbors}}},
           {"config",
            {{"table_name", cfg.table_name}, {"vector_column", cfg.vector_column},
             {"k1", cfg.k1}, {"k2", cfg.k2}, {"thread_num", cfg.thread_num},
-            {"loop", cfg.loop}, {"session_overrides", cfg.session_overrides}}},
+            {"loop", cfg.loop}, {"session_overrides", cfg.session_overrides},
+            {"storage_type", cfg.storage_type}, {"index_representation", cfg.index_representation},
+            {"search_metric", cfg.search_metric}, {"evaluation_metric", cfg.evaluation_metric},
+            {"require_index", cfg.require_index ? Json(*cfg.require_index) : Json(nullptr)},
+            {"rerank", cfg.rerank}, {"candidate_k", cfg.candidate_k}}},
           {"elapsed_seconds", finiteMetric(q.elapsed_seconds)},
           {"qps", finiteMetric(q.qps)},
           {"latency_us", distributionToJson(q.latency_us)},
           {"recall", distributionToJson(q.recall)},
           {"effective_settings", q.effective_settings},
+          {"explain_plan", q.explain_plan ? Json::parse(*q.explain_plan) : Json(nullptr)},
           {"table", tableToJson(q.table)}};
 }
 } // namespace
 
 std::string resultToJson(const BenchmarkResult &result) {
-  Json output = {{"schema_version", 2}, {"tool_version", result.tool_version},
+  Json output = {{"schema_version", 3}, {"tool_version", result.tool_version},
                  {"status", "success"}, {"environment", nullptr},
                  {"setup", nullptr}, {"load", nullptr}, {"index", nullptr},
                  {"query", nullptr}, {"teardown", nullptr}};
